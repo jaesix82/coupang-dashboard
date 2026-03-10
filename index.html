@@ -851,7 +851,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         const hist7start = shiftDate(refDate, -histBefore);
         const hist7end = shiftDate(refDate, histAfter);
 
-        const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData, marginHist] = await Promise.all([
+        let [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData, marginHist] = await Promise.all([
           isRealtime
             ? sbQuery("sales_realtime","option_id,views,sales_qty,revenue,visitors,account,crawled_at",{})
             : (rangeMode ? sbQueryAll : sbQuery)("sales_daily","option_id,views,conversion_rate,sales_qty,cancel_qty",qDate),
