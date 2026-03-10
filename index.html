@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⬡ COUPANG WING / 운영 대시보드</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0e1a; color: #e2e8f0; font-family: 'DM Mono', monospace; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0a0e1a; }
+::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 3px; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+@keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+tbody tr:hover { background: #1a2235 !important; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const SUPABASE_URL = "https://frjklpluafrfoyrzewiv.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZyamtscGx1YWZyZm95cnpld2l2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMzcyOTYsImV4cCI6MjA4NzgxMzI5Nn0.7wf9nuMa2FsReU_Pb-PphcghzlTR_cWiu4SkLqM4JJU";
+
+// ── 날짜 자동 계산 ─────────────────────────────────────
+function getYesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split("T")[0];
+}
+
+// 주차 범위 계산 (기준일 기준 ago주 전)
+// ── Supabase REST 쿼리 헬퍼 ────────────────────────────
+async function sbQuery(table, select, params = {}) {
+  let url = `${SUPABASE_URL}/rest/v1/${table}?select=${encodeURIComponent(select)}`;
+  for (const [k, v] of Object.entries(params)) {
+    const eqIdx = k.indexOf('=');
+    if (eqIdx !== -1) {
+      // "report_date=eq" → report_date=eq.value (PostgREST 필터)
+      const col = k.substring(0, eqIdx);
+      const op = k.substring(eqIdx + 1);
+      url += `&${col}=${op}.${encodeURIComponent(v)}`;
+    } else {
+      // "order", "limit" 등 일반 파라미터
+      url += `&${k}=${encodeURIComponent(v)}`;
+    }
+  }
+  if (!params.limit) url += "&limit=1000";
+  const r = await fetch(url, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function sbQueryAll(table, select, params = {}) {
+  let all = [], offset = 0;
+  while(true) {
+    const page = await sbQuery(table, select, {...params, limit:"1000", offset:String(offset)});
+    all = all.concat(page);
+    if(page.length < 1000) break;
+    offset += 1000;
+  }
+  return all;
+}
+
+async function sbInsert(table, data) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`,
+      "Content-Type":"application/json", Prefer:"return=minimal" },
+    body: JSON.stringify(data)
+  });
+  if(!r.ok) throw new Error(await r.text());
+}
+async function sbDelete(table, params) {
+  let url = `${SUPABASE_URL}/rest/v1/${table}?`;
+  for(const [k,v] of Object.entries(params)) url += `${k}=eq.${encodeURIComponent(v)}&`;
+  const r = await fetch(url, {
+    method:"DELETE", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}` }
+  });
+  if(!r.ok) throw new Error(await r.text());
+}
+async function sbUpsert(table, data, onConflict) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method:"POST", headers:{ apikey:SUPABASE_KEY, Authorization:`Bearer ${SUPABASE_KEY}`,
+      "Content-Type":"application/json", Prefer:`return=minimal,resolution=merge-duplicates` },
+    body: JSON.stringify(data)
+  });
+  if(!r.ok) throw new Error(await r.text());
+}
+
+// ── 포맷 헬퍼 ─────────────────────────────────────────
+const fmtWon = n => n == null ? "-" : "₩" + Math.round(n).toLocaleString("ko-KR");
+const fmtNum = n => n == null ? "-" : Number(n).toLocaleString("ko-KR");
+const fmtPct = n => n == null ? "-" : Number(n).toFixed(1) + "%";
+
+// ── 컬러 팔레트 ───────────────────────────────────────
+const C = {
+  bg:"#0a0e1a", surface:"#111827", surfaceHigh:"#1a2235", border:"#1e2d45",
+  accent:"#00d4ff", accentDim:"#0a3a4a", green:"#00e5a0", greenDim:"#0a2d22",
+  red:"#ff4d6a", redDim:"#2d0a14", yellow:"#ffd60a", yellowDim:"#2d2400",
+  orange:"#ff8c00",
+  muted:"#4a5568", text:"#e2e8f0", textDim:"#718096"
+};
+
+// ── 공통 스타일 ───────────────────────────────────────
+const s = {
+  app: { background: C.bg, minHeight:"100vh", color:C.text, fontFamily:"'DM Mono',monospace" },
+  header: { background:C.surface, borderBottom:`1px solid ${C.border}`, padding:"16px 32px",
+    display:"flex", alignItems:"center", justifyContent:"space-between",
+    position:"sticky", top:0, zIndex:100 },
+  logo: { fontSize:"13px", fontWeight:700, letterSpacing:"0.15em", color:C.accent, textTransform:"uppercase" },
+  dateBadge: { fontSize:"11px", color:C.textDim, background:C.surfaceHigh,
+    padding:"4px 12px", borderRadius:"4px", border:`1px solid ${C.border}` },
+  main: { padding:"28px 32px", maxWidth:"1600px", margin:"0 auto" },
+  sec: { marginBottom:"36px" },
+  secTitle: { fontSize:"10px", fontWeight:700, letterSpacing:"0.2em", color:C.accent,
+    textTransform:"uppercase", marginBottom:"16px", display:"flex", alignItems:"center", gap:"8px" },
+  secLine: { flex:1, height:"1px", background:`linear-gradient(to right, ${C.border}, transparent)` },
+  card: { background:C.surface, border:`1px solid ${C.border}`, borderRadius:"8px", padding:"20px 24px" },
+  kpiGrid: { display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"16px" },
+  tbl: { width:"100%", borderCollapse:"collapse" },
+  th: { fontSize:"9px", fontWeight:700, letterSpacing:"0.15em", textTransform:"uppercase",
+    color:C.textDim, padding:"8px 12px", textAlign:"right", borderBottom:`1px solid ${C.border}`, whiteSpace:"nowrap" },
+  thL: { fontSize:"9px", fontWeight:700, letterSpacing:"0.15em", textTransform:"uppercase",
+    color:C.textDim, padding:"8px 12px", textAlign:"left", borderBottom:`1px solid ${C.border}` },
+  td: { fontSize:"12px", padding:"9px 12px", textAlign:"right", borderBottom:`1px solid ${C.border}14`, color:C.text },
+  tdL: { fontSize:"12px", padding:"9px 12px", textAlign:"left", borderBottom:`1px solid ${C.border}14`, color:C.text },
+  loading: { display:"flex", alignItems:"center", justifyContent:"center",
+    height:"80px", color:C.textDim, fontSize:"12px", letterSpacing:"0.1em" }
+};
+
+// ── 공통 컴포넌트 ─────────────────────────────────────
+function badge(color, text) {
+  return <span style={{display:"inline-block",fontSize:"9px",fontWeight:700,padding:"2px 6px",
+    borderRadius:"3px",letterSpacing:"0.08em",background:color+"22",color:color,
+    border:`1px solid ${color}44`}}>{text}</span>;
+}
+
+function Spinner() {
+  return <div style={s.loading}><span style={{animation:"pulse 1.2s infinite"}}>LOADING…</span></div>;
+}
+
+function ErrBox({msg}) {
+  return <div style={{...s.card,color:C.red,fontSize:"11px",letterSpacing:"0.05em",padding:"16px 20px"}}>
+    ⚠ 데이터 로딩 실패: {msg}
+  </div>;
+}
+
+function SecTitle({n, children}) {
+  return <div style={s.secTitle}>
+    <span>{n} / {children}</span>
+    <div style={s.secLine}/>
+  </div>;
+}
+
+// 7일 히스토리 툴팁
+function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt}) {
+  const [show, setShow] = useState(false);
+  if(!hist || hist.length===0) return children;
+  const avg = hist.reduce((s,d)=>s+(d.v||0),0)/hist.length;
+  const subAvgs = subHist ? subHist.reduce((s,d)=>s+(d.v||0),0)/subHist.length : null;
+  return <span style={{position:"relative",cursor:"default"}}
+    onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
+    {children}
+    {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
+      marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
+      borderRadius:"6px",padding:"8px 12px",minWidth:"150px",boxShadow:"0 4px 16px rgba(0,0,0,0.5)",
+      fontSize:"10px",whiteSpace:"nowrap"}}>
+      <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>{label}</div>
+      {hist.map((d,i)=>{
+        const isSel = d.dt===selectedDate;
+        const sub = subHist && subFmt ? subFmt(d.v, subHist[i]?.v) : null;
+        return <div key={d.dt} style={{display:"flex",justifyContent:"space-between",gap:"16px",
+          padding:"2px 0",color:isSel?C.accent:C.textDim,fontWeight:isSel?700:400,
+          background:isSel?C.accentDim:"transparent",margin:isSel?"0 -4px":"0",
+          padding:isSel?"2px 4px":"2px 0",borderRadius:"3px"}}>
+          <span>{d.dt.slice(5)}</span>
+          <span>{fmt(d.v)}{sub&&<span style={{color:C.textDim,marginLeft:"4px"}}>{sub}</span>}</span>
+        </div>;
+      })}
+      <div style={{borderTop:`1px solid ${C.border}`,marginTop:"4px",paddingTop:"4px",
+        display:"flex",justifyContent:"space-between",color:C.yellow,fontWeight:600}}>
+        <span>7일 평균</span><span>{fmt(Math.round(avg*10)/10)}{subHist&&subFmt&&<span style={{color:C.textDim,marginLeft:"4px"}}>{subFmt(avg,subAvgs)}</span>}</span>
+      </div>
+    </div>}
+  </span>;
+}
+
+// 키워드 광고 상세 툴팁
+function KwTip({children, detail}) {
+  const [show, setShow] = useState(false);
+  if(!detail) return children;
+  const ctr = detail.impressions>0 ? (detail.clicks/detail.impressions*100) : 0;
+  const cvr = detail.clicks>0 ? (detail.orders/detail.clicks*100) : 0;
+  const cpc = detail.clicks>0 ? Math.round(detail.ad_cost/detail.clicks) : 0;
+  const rows = [
+    ["광고비", fmtWon(detail.ad_cost)],
+    ["노출수", fmtNum(detail.impressions)],
+    ["클릭수", `${fmtNum(detail.clicks)} (${fmtPct(ctr)})`],
+    ["전환수", `${fmtNum(detail.orders)}건 (${fmtPct(cvr)})`],
+    ["CPC", fmtWon(cpc)],
+  ];
+  return <span style={{position:"relative",cursor:"default"}}
+    onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
+    {children}
+    {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
+      marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
+      borderRadius:"6px",padding:"8px 12px",minWidth:"140px",boxShadow:"0 4px 16px rgba(0,0,0,0.5)",
+      fontSize:"10px",whiteSpace:"nowrap"}}>
+      {rows.map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",gap:"12px",padding:"2px 0"}}>
+        <span style={{color:C.textDim}}>{label}</span>
+        <span style={{color:C.yellow,fontWeight:600}}>{val}</span>
+      </div>)}
+    </div>}
+  </span>;
+}
+
+// 재고관리 인라인 편집 셀
+function InvEditCell({optionId, field, value, stockManual, setStockManual}) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(String(value||0));
+  const save = async () => {
+    const num = parseInt(val)||0;
+    const cur = stockManual[optionId]||{incoming:0,ordered:0};
+    const updated = {...cur, [field]:num, option_id:optionId, updated_at:new Date().toISOString()};
+    try {
+      await sbUpsert("stock_manual", {option_id:optionId, [field]:num, updated_at:new Date().toISOString()});
+      setStockManual(p=>({...p,[optionId]:{...cur,[field]:num}}));
+    } catch(e) { console.error(e); }
+    setEditing(false);
+  };
+  if(editing) return <input type="number" autoFocus value={val} onChange={e=>setVal(e.target.value)}
+    onBlur={save} onKeyDown={e=>{if(e.key==="Enter")save();if(e.key==="Escape")setEditing(false);}}
+    style={{width:"50px",background:C.surfaceHigh,color:C.text,border:`1px solid ${C.accent}`,
+      borderRadius:"3px",padding:"2px 4px",fontSize:"11px",fontFamily:"'DM Mono',monospace",
+      textAlign:"center",outline:"none"}}
+    onClick={e=>e.stopPropagation()}/>;
+  return <span onClick={e=>{e.stopPropagation();setEditing(true);}} style={{cursor:"pointer",
+    borderBottom:`1px dashed ${C.accent}44`,padding:"1px 4px"}}>
+    {value>0?fmtNum(value):<span style={{color:C.muted}}>0</span>}
+  </span>;
+}
+
+// 옵션명 사이즈 정렬
+const SIZE_ORDER = {S:1,M:2,L:3,XL:4,XXL:5,"2XL":5,"3XL":6,FREE:7};
+function sizeRank(name) {
+  if(!name) return [0,"",-1,0];
+  const isSet = /세트/i.test(name) ? 1 : 0;
+  const clean = name.replace(/세트/g,"").trim();
+  // 숫자 사이즈 + 나머지 텍스트 (예: "200블랙" → num=200, rest="블랙")
+  const numMatch = clean.match(/(\d{2,3})\s*(.*)/);
+  if(numMatch) { const rest=numMatch[2]||""; return [isSet, rest, -1, parseInt(numMatch[1])]; }
+  // "블랙 200" 형태
+  const numMatch2 = clean.match(/(.*?)\s*(\d{2,3})$/);
+  if(numMatch2) { const rest=numMatch2[1]||""; return [isSet, rest, -1, parseInt(numMatch2[2])]; }
+  // 문자 사이즈 (앞이든 뒤든)
+  const sizeMatch = clean.match(/\b(3XL|2XL|XXL|XL|FREE|[SML])\b/i);
+  if(sizeMatch) { const rank = SIZE_ORDER[sizeMatch[1].toUpperCase()]||50; return [isSet, "", rank, 0]; }
+  return [isSet, name, 50, 0];
+}
+function sortOpts(opts) {
+  return [...opts].sort((a,b) => {
+    const ra = sizeRank(a.optName), rb = sizeRank(b.optName);
+    // isSet → rest(색상) → sizeRank → numSize
+    if(ra[0]!==rb[0]) return ra[0]-rb[0];
+    if(ra[1]!==rb[1]) return ra[1]<rb[1]?-1:1;
+    if(ra[2]!==rb[2]) return ra[2]-rb[2];
+    return ra[3]-rb[3];
+  });
+}
+
+const acctBtnStyle = (active) => ({
+  background:active?C.accent+"22":"transparent", border:`1px solid ${active?C.accent:C.border}`,
+  color:active?C.accent:C.textDim, borderRadius:"4px", padding:"4px 12px",
+  fontSize:"11px", cursor:"pointer", fontFamily:"'DM Mono',monospace", fontWeight:active?700:400
+});
+
+function AcctButtons({accounts, current, onChange}) {
+  return <div style={{display:"flex",gap:"8px",marginBottom:"14px",alignItems:"center"}}>
+    <button onClick={()=>onChange("ALL")} style={acctBtnStyle(current==="ALL")}>합계</button>
+    {accounts.map(a=><button key={a} onClick={()=>onChange(a)} style={acctBtnStyle(current===a)}>{a}</button>)}
+  </div>;
+}
+
+// ── 채팅 패널 ────────────────────────────────────────
+function ChatPanel({context, yesterday}) {
+  const [messages, setMessages] = useState([
+    { role: "assistant", content: "안녕하세요. 대시보드 데이터를 기반으로 분석해드릴게요." }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const DEFAULT_KEY = "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";
+  const [apiKey, setApiKey] = useState(localStorage.getItem("ANTHROPIC_KEY")||DEFAULT_KEY);
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [memos, setMemos] = useState([]);
+  const messagesEndRef = React.useRef(null);
+
+  React.useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({behavior:"smooth"});
+  }, [messages]);
+
+  // 세션 시작 시 메모 자동 로드
+  React.useEffect(() => {
+    sbQuery("ai_memos","id,title,content,created_at",{order:"created_at.desc",limit:"20"})
+      .then(rows => setMemos(rows))
+      .catch(()=>{});
+  }, []);
+
+  const saveKey = () => {
+    const clean = apiKey.replace(/[^\x20-\x7E]/g,"").trim();
+    if(clean) {
+      localStorage.setItem("ANTHROPIC_KEY", clean);
+      setApiKey(clean);
+      setShowKeyInput(false);
+    }
+  };
+
+  function buildSystemPrompt(ctx) {
+    const prods = ctx.topProducts||[];
+    const prodDetails = prods.slice(0,15).map(p => {
+      const opts = (p.opts||[]).slice(0,5);
+      const optLines = opts.map(o => {
+        const cancelAbs = Math.abs(o.cancel_qty||0);
+        const totalSold = (o.sales_qty||0)+cancelAbs;
+        const cancelRate = totalSold>0?(cancelAbs/totalSold*100).toFixed(1):"0";
+        return `    - ${o.optName}: 재고${o.stock!=null?o.stock:"?"}개, 조회${o.views||0}, 전환율${(o.conversion_rate||0).toFixed(1)}%, 순판매${o.sales_qty||0}건, 취소${cancelAbs}건(반품률${cancelRate}%), 매출${(o.revenue||0).toLocaleString()}원, 광고비${(o.adCost||0).toLocaleString()}원${o.wingQty>0?`, 윙판매${o.wingQty}건`:""}`;
+      }).join('\n');
+      return `  * ${p.pName}: 총매출${p.rev?.toLocaleString()}원, 총${p.qty}건, 광고비${p.adCost?.toLocaleString()}원\n${optLines}`;
+    }).join('\n');
+
+    return `당신은 쿠팡 윙 온라인셀러의 운영 대시보드 전담 분석 어시스턴트입니다.
+
+## 대시보드 컬럼 정의
+- 판매량(sales_qty): 순판매량 (총판매 - 취소). 괄호 안 숫자는 윙 판매량
+- 취소: 취소수량(절대값)과 반품률. 반품률 = 취소 / (순판매+취소) × 100. 30% 초과 시 빨간색 경고
+- 조회수(views): 상품 페이지 방문 수
+- 전환율(conversion_rate): 조회 대비 구매 비율 = 판매수량/조회수×100
+- 매출(revenue): margin_daily 뷰 기준 매출 (쿠폰 차감 후)
+- 광고비(ad_cost): 쿠팡 PA 광고 지출. 광고판매: 광고로 발생한 판매 건수
+- 순이익: (마진단가 × 판매수량). 마진 = 매출 - 원가 - 수수료 - 배송비 - 쿠폰
+- 재고(stock): 최신 스냅샷 기준 잔여 수량. 품절이면 0
+- 7일 평균: 각 데이터 셀에 hover 시 최근 7일 추이와 평균 표시. ▼은 7일 평균 이하, ▲은 이상
+- 윙 vs 로켓그로스: 동일 상품이 윙(직배송)과 로켓그로스(쿠팡물류)로 판매 가능. 옵션 행에서 병합 표시
+
+## 현재 데이터 (기준일: ${ctx.yesterday||yesterday})
+
+### KPI 요약
+- 총 매출: ${ctx.kpi?.rev?.toLocaleString()||"?"}원
+- 총 판매: ${ctx.kpi?.qty||"?"}건
+- 총 광고비: ${ctx.kpi?.adCost?.toLocaleString()||"?"}원 (광고판매 ${ctx.kpi?.adQty||0}건, 비율 ${ctx.kpi?.adRatio||0}%)
+- 순이익 (추정): ${ctx.kpi?.totalMargin?.toLocaleString()||"?"}원
+
+### 상품별 상세 (매출 상위)
+${prodDetails||'데이터 로딩 중...'}
+
+사용자가 대시보드 데이터에 대해 질문하면 위 정의와 실제 수치를 기반으로 정확하게 답하세요.
+답변은 한국어로, 간결하고 실용적으로. 구체적 수치를 인용하세요.
+
+## DB 직접 조회
+query_database 도구로 Supabase DB에 직접 쿼리할 수 있습니다. 데이터가 부족하거나 원인 분석이 필요하면 적극 활용하세요.
+사용 가능한 테이블과 주요 컬럼:
+- sales_daily: option_id, report_date, views, sales_qty, cancel_qty, revenue, conversion_rate
+- ads_daily: option_id, report_date, keyword, impressions, clicks, ad_cost, orders_1d, sales_qty_1d, campaign_name
+- inventory_snapshots: option_id, snapshot_date, stock, is_item_winner, revenue_7d, sales_7d
+- products: option_id, product_name, option_name, account, fulfillment_type, vendor_item_id
+- margin_daily (뷰): option_id, report_date, product_name, option_name, margin, margin_rate, revenue, account
+- sales_realtime: option_id, views, sales_qty, revenue, visitors, account, crawled_at
+- cost_history: option_id, start_date, cost (원가 이력)
+- commission_history: option_id, start_date, rate (수수료율 이력)
+
+쿼리 시 select에 필요한 컬럼만 지정하고, filter로 조건을 걸어 데이터를 최소화하세요.
+여러 번 조회 가능합니다. 한번에 너무 많은 데이터를 가져오지 마세요 (limit 사용).
+
+## 메모리
+save_memo로 중요한 발견/패턴/인사이트를 저장하면 다음 세션에서 자동 참고됩니다.
+예: 특정 상품의 계절 패턴, 광고 효율 기준, 사용자 선호 분석 방식 등.
+outdated된 메모는 delete_memo로 정리하세요.
+
+${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(function(m){return "[#"+m.id+"] "+m.title+" ("+(m.created_at?.slice(0,10)||"")+")\\n"+m.content;}).join("\n\n") : "저장된 메모 없음"}`;
+  }
+
+  const DB_TOOLS = [{
+    name: "query_database",
+    description: "Supabase DB에 REST API로 쿼리합니다. select에 필요한 컬럼, filter에 조건을 지정하세요.",
+    input_schema: {
+      type: "object",
+      properties: {
+        table: { type: "string", description: "테이블명 (예: sales_daily, ads_daily, products, inventory_snapshots, margin_daily, sales_realtime)" },
+        select: { type: "string", description: "조회할 컬럼 (예: option_id,report_date,sales_qty,revenue)" },
+        filter: { type: "object", description: "필터 조건 객체 (예: {\"report_date=eq\":\"2026-03-09\",\"option_id=eq\":\"12345\"})", additionalProperties: { type: "string" } },
+        order: { type: "string", description: "정렬 (예: report_date.desc)" },
+        limit: { type: "number", description: "결과 제한 (기본 50)" }
+      },
+      required: ["table","select"]
+    }
+  },{
+    name: "save_memo",
+    description: "중요한 분석 결과, 패턴, 인사이트를 메모로 저장합니다. 다음 세션에서 자동으로 참고됩니다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "메모 제목 (예: A01 주력상품 특성, 광고 효율 분석)" },
+        content: { type: "string", description: "메모 내용 (구체적 수치, 패턴, 주의사항 등)" }
+      },
+      required: ["title","content"]
+    }
+  },{
+    name: "delete_memo",
+    description: "더 이상 유효하지 않은 메모를 삭제합니다.",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "number", description: "삭제할 메모 ID" }
+      },
+      required: ["id"]
+    }
+  }];
+
+  const executeTool = async (name, input) => {
+    if(name==="query_database") {
+      const params = { select: input.select };
+      if(input.filter) Object.assign(params, input.filter);
+      if(input.order) params.order = input.order;
+      params.limit = String(input.limit||50);
+      const rows = await sbQuery(input.table, input.select, params);
+      return JSON.stringify(rows.slice(0, input.limit||50));
+    }
+    if(name==="save_memo") {
+      await sbInsert("ai_memos",{title:input.title, content:input.content});
+      const updated = await sbQuery("ai_memos","id,title,content,created_at",{order:"created_at.desc",limit:"20"});
+      setMemos(updated);
+      return `메모 저장 완료: "${input.title}"`;
+    }
+    if(name==="delete_memo") {
+      await sbDelete("ai_memos",{id:input.id});
+      const updated = await sbQuery("ai_memos","id,title,content,created_at",{order:"created_at.desc",limit:"20"});
+      setMemos(updated);
+      return `메모 #${input.id} 삭제 완료`;
+    }
+    return "알 수 없는 도구";
+  };
+
+  const callApi = async (apiMessages, key) => {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 2048,
+        system: buildSystemPrompt(context),
+        tools: DB_TOOLS,
+        messages: apiMessages
+      })
+    });
+    if(!response.ok) {
+      const errText = await response.text();
+      throw new Error(response.status===401?"API 키를 확인해주세요":errText);
+    }
+    return await response.json();
+  };
+
+  const sendMessage = async () => {
+    const rawKey = localStorage.getItem("ANTHROPIC_KEY") || DEFAULT_KEY;
+    const key = rawKey.replace(/[^\x20-\x7E]/g,"").trim();
+    if(!key) { setShowKeyInput(true); return; }
+    const msg = input.trim();
+    if(!msg) return;
+
+    const newMessages = [...messages, {role:"user",content:msg}];
+    setMessages(newMessages);
+    setInput("");
+    setLoading(true);
+
+    try {
+      let apiMessages = newMessages.filter(m=>m.role!=="error"&&m.role!=="db").map(m=>({role:m.role==="error"?"assistant":m.role,content:m.content}));
+      let data = await callApi(apiMessages, key);
+      let loops = 0;
+
+      // tool use 루프: AI가 DB 조회를 요청하면 실행 후 결과 전달
+      while(data.stop_reason==="tool_use" && loops<5) {
+        loops++;
+        const toolBlocks = data.content.filter(b=>b.type==="tool_use");
+        // AI 응답 중 텍스트 부분이 있으면 표시
+        const textParts = data.content.filter(b=>b.type==="text").map(b=>b.text).join("");
+        if(textParts) setMessages(prev=>[...prev,{role:"assistant",content:textParts}]);
+
+        // 도구 실행 표시
+        for(const tb of toolBlocks) {
+          const label = tb.name==="query_database"?`🔍 ${tb.input.table} 조회 중...`
+            :tb.name==="save_memo"?`💾 메모 저장: ${tb.input.title}`
+            :tb.name==="delete_memo"?`🗑 메모 #${tb.input.id} 삭제`:`⚙ ${tb.name}`;
+          setMessages(prev=>[...prev,{role:"db",content:label}]);
+        }
+
+        // tool results 구성
+        const toolResults = [];
+        for(const tb of toolBlocks) {
+          try {
+            const result = await executeTool(tb.name, tb.input);
+            toolResults.push({type:"tool_result",tool_use_id:tb.id,content:result});
+          } catch(e) {
+            toolResults.push({type:"tool_result",tool_use_id:tb.id,content:`오류: ${e.message}`,is_error:true});
+          }
+        }
+
+        // 다음 API 호출: assistant 응답 + tool results
+        apiMessages = [...apiMessages,
+          {role:"assistant",content:data.content},
+          {role:"user",content:toolResults}
+        ];
+        data = await callApi(apiMessages, key);
+      }
+
+      // 최종 텍스트 응답 추출
+      const finalText = data.content.filter(b=>b.type==="text").map(b=>b.text).join("\n");
+      if(finalText) setMessages(prev=>[...prev, {role:"assistant",content:finalText}]);
+    } catch(e) {
+      setMessages(prev=>[...prev, {role:"error",content:`오류: ${e.message}`}]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if(e.key==="Enter"&&!e.shiftKey) { e.preventDefault(); sendMessage(); }
+  };
+
+  const chatStyles = {
+    panel: {width:"320px",minWidth:"320px",height:"100vh",position:"sticky",top:0,
+      background:C.surface,borderLeft:`1px solid ${C.border}`,display:"flex",flexDirection:"column"},
+    header: {padding:"14px 16px",borderBottom:`1px solid ${C.border}`,
+      fontSize:"11px",fontWeight:700,letterSpacing:"0.15em",color:C.accent},
+    msgArea: {flex:1,overflowY:"auto",padding:"12px"},
+    msgUser: {background:C.accentDim,border:`1px solid ${C.accent}33`,borderRadius:"8px 8px 2px 8px",
+      padding:"10px 14px",marginBottom:"8px",fontSize:"12px",color:C.text,marginLeft:"24px"},
+    msgBot: {background:C.surfaceHigh,border:`1px solid ${C.border}`,borderRadius:"8px 8px 8px 2px",
+      padding:"10px 14px",marginBottom:"8px",fontSize:"12px",color:C.text,marginRight:"24px",
+      lineHeight:"1.6",whiteSpace:"pre-wrap"},
+    msgErr: {background:C.redDim||"#2d0a14",border:`1px solid ${C.red}33`,borderRadius:"8px",
+      padding:"10px 14px",marginBottom:"8px",fontSize:"11px",color:C.red},
+    inputArea: {padding:"12px",borderTop:`1px solid ${C.border}`,display:"flex",gap:"8px"},
+    input: {flex:1,background:C.surfaceHigh,border:`1px solid ${C.border}`,borderRadius:"6px",
+      padding:"8px 12px",color:C.text,fontSize:"12px",fontFamily:"'DM Mono',monospace",
+      outline:"none",resize:"none"},
+    sendBtn: {background:C.accent,color:C.bg,border:"none",borderRadius:"6px",padding:"8px 14px",
+      fontSize:"11px",fontWeight:700,cursor:"pointer",fontFamily:"'DM Mono',monospace",
+      opacity:loading?0.5:1}
+  };
+
+  return <div style={chatStyles.panel}>
+    <div style={chatStyles.header}>
+      <span>AI 분석</span>
+      <span style={{fontSize:"9px",color:C.textDim,marginLeft:"8px",fontWeight:400}}>{yesterday}</span>
+      {localStorage.getItem("ANTHROPIC_KEY") && <button onClick={()=>{setShowKeyInput(true);}}
+        style={{float:"right",background:"none",border:"none",color:C.muted,fontSize:"9px",cursor:"pointer",fontFamily:"'DM Mono',monospace"}}>KEY</button>}
+    </div>
+
+    {showKeyInput && <div style={{padding:"12px",borderBottom:`1px solid ${C.border}`}}>
+      <div style={{fontSize:"10px",color:C.textDim,marginBottom:"6px"}}>Anthropic API Key</div>
+      <div style={{display:"flex",gap:"6px"}}>
+        <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter")saveKey();}}
+          placeholder="sk-ant-..."
+          style={{...chatStyles.input,flex:1}} />
+        <button onClick={saveKey}
+          style={{background:C.green,color:C.bg,border:"none",borderRadius:"4px",padding:"6px 12px",
+            fontSize:"10px",fontWeight:700,cursor:"pointer",fontFamily:"'DM Mono',monospace"}}>저장</button>
+      </div>
+    </div>}
+
+    <div style={chatStyles.msgArea}>
+      {messages.map((m,i) => <div key={i}
+        style={m.role==="user"?chatStyles.msgUser:m.role==="error"?chatStyles.msgErr:m.role==="db"?{...chatStyles.msgBot,fontSize:"9px",color:C.yellow,padding:"4px 10px",opacity:0.7}:chatStyles.msgBot}>
+        {m.content}
+      </div>)}
+      {loading && <div style={{...chatStyles.msgBot,animation:"pulse 1.2s infinite",color:C.textDim}}>분석 중...</div>}
+      <div ref={messagesEndRef}/>
+    </div>
+
+    <div style={chatStyles.inputArea}>
+      <textarea rows={1} value={input} onChange={e=>setInput(e.target.value)}
+        onKeyDown={handleKeyDown} placeholder="질문하세요..." style={chatStyles.input}/>
+      <button onClick={sendMessage} disabled={loading} style={chatStyles.sendBtn}>전송</button>
+    </div>
+  </div>;
+}
+
+// ── 섹션 1: KPI ───────────────────────────────────────
+function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange}) {
+  const [rawData, setRawData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [acctFilter, setAcctFilter] = useState("ALL");
+  const [realtimeData, setRealtimeData] = useState(null);
+  const [realtimeLoading, setRealtimeLoading] = useState(false);
+  const [realtimeErr, setRealtimeErr] = useState(null);
+
+  useEffect(() => {
+    setRawData(null); setErr(null); setAcctFilter("ALL"); onTabChange("yesterday");
+    setRealtimeData(null); setRealtimeErr(null);
+    const qDate = rangeMode
+      ? {"report_date=gte":date,"report_date=lte":endDate}
+      : {"report_date=eq":date};
+    (async () => {
+      try {
+        const [margin, adsRaw, prods, sales] = await Promise.all([
+          sbQuery("margin_daily","option_id,revenue,margin,sales_qty,account",qDate),
+          sbQuery("ads_daily","option_id,ad_cost,sales_qty_1d",qDate),
+          sbQueryAll("products","option_id,account",{}),
+          sbQuery("sales_daily","option_id,account",qDate),
+        ]);
+        const acctMap = {};
+        sales.forEach(r=>{ if(r.account) acctMap[r.option_id]=r.account; });
+        prods.forEach(p=>{ if(p.account) acctMap[p.option_id]=p.account; });
+        margin.forEach(r=>{ if(r.account) acctMap[r.option_id]=r.account; });
+        const acctSet = new Set();
+        margin.forEach(r=>{ const a=acctMap[r.option_id]; if(a) acctSet.add(a); });
+        const rawObj = {margin, adsRaw, acctMap, accounts:[...acctSet].sort()};
+        setRawData(rawObj);
+        if(onLoad) {
+          const adT = {};
+          adsRaw.forEach(a => {
+            if(!adT[a.option_id]) adT[a.option_id]={ad_cost:0,sales_qty_1d:0};
+            adT[a.option_id].ad_cost+=(a.ad_cost||0); adT[a.option_id].sales_qty_1d+=(a.sales_qty_1d||0);
+          });
+          const rv = margin.reduce((s,r)=>s+(r.revenue||0),0);
+          const qt = margin.reduce((s,r)=>s+(r.sales_qty||0),0);
+          const ac = Object.values(adT).reduce((s,a)=>s+(a.ad_cost||0),0);
+          const aq = Object.values(adT).reduce((s,a)=>s+(a.sales_qty_1d||0),0);
+          const tm = margin.reduce((s,r)=>s+((r.margin||0)*(r.sales_qty||0)),0);
+          onLoad({rev:rv, adCost:ac, totalMargin:tm, adRatio:qt>0?((aq/qt)*100).toFixed(1):0, qty:qt, adQty:aq});
+        }
+      } catch(e){ setErr(e.message); }
+    })();
+  }, [date, endDate, rangeMode]);
+
+  const loadRealtime = async () => {
+    setRealtimeLoading(true); setRealtimeErr(null);
+    try {
+      const data = await sbQuery("sales_realtime","option_id,revenue,orders,sales_qty,visitors,crawled_at,account",{});
+      if(!data || data.length===0) { setRealtimeData([]); }
+      else { setRealtimeData(data); }
+    } catch(e) { setRealtimeErr(e.message); }
+    finally { setRealtimeLoading(false); }
+  };
+
+  const handleTabChange = (tab) => {
+    onTabChange(tab);
+    if(tab==="realtime" && !realtimeData) loadRealtime();
+  };
+
+  if (err) return <ErrBox msg={err}/>;
+  if (!rawData) return <Spinner/>;
+
+  const {margin, adsRaw, acctMap, accounts} = rawData;
+
+  // 탭 스타일
+  const tabStyle = (active) => ({
+    background:active?C.accent+"22":"transparent", border:`1px solid ${active?C.accent:C.border}`,
+    color:active?C.accent:C.textDim, borderRadius:"4px", padding:"5px 14px",
+    fontSize:"11px", cursor:"pointer", fontFamily:"'DM Mono',monospace", fontWeight:active?700:400
+  });
+
+  // 실시간 탭일 때
+  if(activeTab==="realtime") {
+    if(realtimeLoading) return <div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"14px"}}>
+        <button onClick={()=>handleTabChange("yesterday")} style={tabStyle(false)}>어제 확정</button>
+        <button style={tabStyle(true)}>실시간</button>
+      </div>
+      <Spinner/>
+    </div>;
+    if(realtimeErr) return <div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"14px"}}>
+        <button onClick={()=>handleTabChange("yesterday")} style={tabStyle(false)}>어제 확정</button>
+        <button style={tabStyle(true)}>실시간</button>
+      </div>
+      <ErrBox msg={realtimeErr}/>
+    </div>;
+    if(!realtimeData || realtimeData.length===0) return <div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"14px"}}>
+        <button onClick={()=>handleTabChange("yesterday")} style={tabStyle(false)}>어제 확정</button>
+        <button style={tabStyle(true)}>실시간</button>
+      </div>
+      <div style={{...s.card,color:C.textDim,textAlign:"center",fontSize:"12px",padding:"32px"}}>
+        수집 데이터 없음 — 터미널에서 <span style={{color:C.accent}}>python tools/fetch_realtime.py</span> 실행
+      </div>
+    </div>;
+
+    const fRT = acctFilter==="ALL" ? realtimeData : realtimeData.filter(r=>r.account===acctFilter);
+    const rtAccts = [...new Set(realtimeData.map(r=>r.account).filter(Boolean))].sort();
+    const rtRev = fRT.reduce((s,r)=>s+(r.revenue||0),0);
+    const rtOrders = fRT.reduce((s,r)=>s+(r.orders||0),0);
+    const rtQty = fRT.reduce((s,r)=>s+(r.sales_qty||0),0);
+    const rtVisitors = fRT.reduce((s,r)=>s+(r.visitors||0),0);
+    const crawledAt = realtimeData[0]?.crawled_at;
+    const crawledTime = crawledAt ? new Date(crawledAt).toLocaleTimeString("ko-KR",{hour:"2-digit",minute:"2-digit"}) : null;
+
+    const kpis = [
+      { label:"실시간 매출", val:fmtWon(rtRev), sub:`주문 ${fmtNum(rtOrders)}건`, color:C.accent, dim:C.accentDim },
+      { label:"판매수량", val:fmtNum(rtQty), sub:`오늘 누적`, color:C.yellow, dim:C.yellowDim },
+      { label:"방문자", val:fmtNum(rtVisitors), sub:`오늘 누적`, color:C.green, dim:C.greenDim },
+    ];
+    return <div>
+      <div style={{display:"flex",gap:"8px",marginBottom:"14px",alignItems:"center"}}>
+        <button onClick={()=>handleTabChange("yesterday")} style={tabStyle(false)}>어제 확정</button>
+        <button style={tabStyle(true)}>실시간</button>
+        <button onClick={loadRealtime} style={{...tabStyle(false),fontSize:"13px",padding:"4px 8px",lineHeight:1}} title="새로고침">↻</button>
+        <AcctButtons accounts={rtAccts} current={acctFilter} onChange={setAcctFilter}/>
+        {crawledTime && <span style={{fontSize:"10px",color:C.textDim,marginLeft:"auto"}}>마지막 수집: {crawledTime}</span>}
+      </div>
+      <div style={s.kpiGrid}>
+        {kpis.map(k => <div key={k.label} style={{
+          background:`linear-gradient(135deg,${C.surface} 60%,${k.dim})`,
+          border:`1px solid ${k.color}44`, borderRadius:"8px", padding:"20px 24px",
+          position:"relative", overflow:"hidden", animation:"fadeIn 0.4s ease"
+        }}>
+          <div style={{position:"absolute",top:0,left:0,right:0,height:"2px",background:k.color}}/>
+          <div style={{fontSize:"10px",fontWeight:700,letterSpacing:"0.18em",color:C.textDim,textTransform:"uppercase",marginBottom:"8px"}}>{k.label}</div>
+          <div style={{fontSize:"26px",fontWeight:700,color:k.color,letterSpacing:"-0.02em",lineHeight:1,marginBottom:"4px"}}>{k.val}</div>
+          <div style={{fontSize:"11px",color:C.textDim}}>{k.sub}</div>
+        </div>)}
+      </div>
+    </div>;
+  }
+
+  // 어제 확정 탭 (기존 로직)
+  const fMargin = acctFilter==="ALL" ? margin : margin.filter(r=>acctMap[r.option_id]===acctFilter);
+  const fAds = acctFilter==="ALL" ? adsRaw : adsRaw.filter(r=>acctMap[r.option_id]===acctFilter);
+
+  const adTotals = {};
+  fAds.forEach(a => {
+    if(!adTotals[a.option_id]) adTotals[a.option_id] = {ad_cost:0, sales_qty_1d:0};
+    adTotals[a.option_id].ad_cost += (a.ad_cost||0);
+    adTotals[a.option_id].sales_qty_1d += (a.sales_qty_1d||0);
+  });
+
+  const rev = fMargin.reduce((s,r)=>s+(r.revenue||0),0);
+  const qty = fMargin.reduce((s,r)=>s+(r.sales_qty||0),0);
+  const adCost = Object.values(adTotals).reduce((s,a)=>s+(a.ad_cost||0),0);
+  const adQty = Object.values(adTotals).reduce((s,a)=>s+(a.sales_qty_1d||0),0);
+  const totalMargin = fMargin.reduce((s,r)=>s+((r.margin||0)*(r.sales_qty||0)),0);
+  const adRatio = qty>0?((adQty/qty)*100).toFixed(1):0;
+
+  const kpis = [
+    { label:"총 매출", val:fmtWon(rev), sub:`판매 ${fmtNum(qty)}건`, color:C.accent, dim:C.accentDim },
+    { label:"총 광고비", val:fmtWon(adCost), sub:`광고판매 ${fmtNum(adQty)}건 (${adRatio}%)`, color:C.yellow, dim:C.yellowDim },
+    { label:"순이익 (추정)", val:fmtWon(totalMargin), sub:`마진율 ${rev>0?((totalMargin/rev)*100).toFixed(1):0}% · margin_daily 기준`, color:C.green, dim:C.greenDim },
+  ];
+  return <div>
+    <div style={{display:"flex",gap:"8px",marginBottom:"14px",alignItems:"center"}}>
+      <button style={tabStyle(true)}>어제 확정</button>
+      <button onClick={()=>handleTabChange("realtime")} style={tabStyle(false)}>실시간</button>
+      <AcctButtons accounts={accounts} current={acctFilter} onChange={setAcctFilter}/>
+    </div>
+    <div style={s.kpiGrid}>
+      {kpis.map(k => <div key={k.label} style={{
+        background:`linear-gradient(135deg,${C.surface} 60%,${k.dim})`,
+        border:`1px solid ${k.color}44`, borderRadius:"8px", padding:"20px 24px",
+        position:"relative", overflow:"hidden", animation:"fadeIn 0.4s ease"
+      }}>
+        <div style={{position:"absolute",top:0,left:0,right:0,height:"2px",background:k.color}}/>
+        <div style={{fontSize:"10px",fontWeight:700,letterSpacing:"0.18em",color:C.textDim,textTransform:"uppercase",marginBottom:"8px"}}>{k.label}</div>
+        <div style={{fontSize:"26px",fontWeight:700,color:k.color,letterSpacing:"-0.02em",lineHeight:1,marginBottom:"4px"}}>{k.val}</div>
+        <div style={{fontSize:"11px",color:C.textDim}}>{k.sub}</div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+// ── 섹션 2: 어제 판매 트리 ────────────────────────────
+function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
+  const [rows, setRows] = useState(null);
+  const [exp, setExp] = useState({});
+  const [err, setErr] = useState(null);
+  const [acctFilter, setAcctFilter] = useState("ALL");
+  const [accounts, setAccounts] = useState([]);
+  const [salesOnly, setSalesOnly] = useState(true);
+  const [hideMode, setHideMode] = useState("hide");
+  const [kwMode, setKwMode] = useState(false);
+  const [invMode, setInvMode] = useState(false);
+  const [hiddenSet, setHiddenSet] = useState(new Set());
+  const [stockManual, setStockManual] = useState({});
+
+  useEffect(() => {
+    sbQuery("hidden_options","option_id",{}).then(rows => setHiddenSet(new Set(rows.map(r=>r.option_id)))).catch(()=>{});
+    sbQuery("stock_manual","option_id,incoming,ordered",{}).then(rows => {
+      const m={}; rows.forEach(r=>m[r.option_id]={incoming:r.incoming||0,ordered:r.ordered||0}); setStockManual(m);
+    }).catch(()=>{});
+  }, []);
+
+  const toggleHidden = async (optionId) => {
+    const next = new Set(hiddenSet);
+    if(next.has(optionId)) {
+      next.delete(optionId);
+      await sbDelete("hidden_options",{option_id:optionId}).catch(()=>{});
+    } else {
+      next.add(optionId);
+      await sbInsert("hidden_options",{option_id:optionId}).catch(()=>{});
+    }
+    setHiddenSet(next);
+  };
+
+  useEffect(() => {
+    setRows(null); setErr(null); setExp({}); setAcctFilter("ALL");
+    const isRealtime = activeTab==="realtime";
+    const qDate = rangeMode
+      ? {"report_date=gte":date,"report_date=lte":endDate}
+      : {"report_date=eq":date};
+    const refDate = rangeMode ? endDate : date;
+    (async () => {
+      try {
+        // 최신 snapshot_date 조회
+        const snapMeta = await sbQuery("inventory_snapshots","snapshot_date",
+          {"order":"snapshot_date.desc","limit":"1"});
+        const latestSnap = snapMeta.length>0 ? snapMeta[0].snapshot_date : refDate;
+
+        // 7일 히스토리: 항상 어제 기준 최근 7일
+        const yd = new Date(getYesterday());
+        const d7start = new Date(yd); d7start.setDate(yd.getDate()-6);
+        const hist7start = d7start.toISOString().split("T")[0];
+        const hist7end = getYesterday();
+
+        const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData] = await Promise.all([
+          isRealtime
+            ? sbQuery("sales_realtime","option_id,views,sales_qty,revenue,visitors,account,crawled_at",{})
+            : sbQuery("sales_daily","option_id,views,conversion_rate,sales_qty,cancel_qty",qDate),
+          isRealtime ? Promise.resolve([]) : sbQuery("ads_daily","option_id,ad_cost,sales_qty_1d,keyword,impressions,clicks,orders_1d",qDate),
+          isRealtime ? Promise.resolve([]) : sbQuery("margin_daily","option_id,product_name,option_name,margin,margin_rate,account,revenue",qDate),
+          sbQuery("inventory_snapshots","option_id,stock,is_item_winner,sales_7d,sales_30d",{"snapshot_date=eq":latestSnap}),
+          sbQueryAll("products","option_id,account,product_id,vendor_item_id,fulfillment_type,product_name,option_name",{}),
+          isRealtime ? Promise.resolve([]) : sbQueryAll("sales_daily","option_id,views,sales_qty,conversion_rate,revenue,cancel_qty,report_date",
+            {"report_date=gte":hist7start,"report_date=lte":hist7end}),
+          isRealtime ? Promise.resolve([]) : sbQueryAll("ads_daily","option_id,ad_cost,report_date",
+            {"report_date=gte":hist7start,"report_date=lte":hist7end}),
+          isRealtime ? Promise.resolve([]) : sbQueryAll("inventory_snapshots","option_id,stock,snapshot_date",
+            {"snapshot_date=gte":hist7start,"snapshot_date=lte":hist7end}),
+          sbQuery("cost_history","option_id,cost",{"order":"start_date.desc"}),
+          sbQuery("exchange_rate_history","option_id,exchange_rate",{"order":"start_date.desc"}),
+        ]);
+
+        // 실시간 모드: sales_realtime에서 revenue 직접 제공, conversion_rate 계산
+        if(isRealtime) {
+          sales.forEach(r => {
+            r.conversion_rate = r.views>0 ? (r.sales_qty/r.views)*100 : 0;
+          });
+        }
+
+        // 7일 날짜 리스트 생성
+        const hist7dates = [];
+        for(let i=0;i<7;i++) {
+          const dd = new Date(d7start); dd.setDate(d7start.getDate()+i);
+          hist7dates.push(dd.toISOString().split("T")[0]);
+        }
+
+        // 히스토리 맵: histMap[option_id] = {views:[{dt,v},...], qty:[...], cr:[...], stock:[...], adCost:[...]}
+        const histMap = {};
+        const ensureHist = (oid) => {
+          if(!histMap[oid]) histMap[oid]={views:{},qty:{},cr:{},stock:{},adCost:{},revenue:{},cancel:{}};
+        };
+        sales7d.forEach(r => {
+          ensureHist(r.option_id);
+          const h = histMap[r.option_id];
+          h.views[r.report_date] = (h.views[r.report_date]||0)+(r.views||0);
+          h.qty[r.report_date] = (h.qty[r.report_date]||0)+(r.sales_qty||0);
+          h.cr[r.report_date] = r.conversion_rate||0;
+          h.revenue[r.report_date] = (h.revenue[r.report_date]||0)+(r.revenue||0);
+          h.cancel[r.report_date] = (h.cancel[r.report_date]||0)+Math.abs(r.cancel_qty||0);
+        });
+        ads7d.forEach(r => {
+          ensureHist(r.option_id);
+          histMap[r.option_id].adCost[r.report_date] = (histMap[r.option_id].adCost[r.report_date]||0)+(r.ad_cost||0);
+        });
+        invHist.forEach(r => {
+          ensureHist(r.option_id);
+          histMap[r.option_id].stock[r.snapshot_date] = r.stock||0;
+        });
+
+        // 히스토리 배열 변환 함수
+        const getHist = (oid, field) => {
+          const h = histMap[oid];
+          if(!h) return [];
+          const map = h[field]||{};
+          return hist7dates.map(dt=>({dt, v:map[dt]||0}));
+        };
+
+        // 옵션별 7일 평균 (조회수, 판매량, 전환율)
+        const avg7d = {};
+        sales7d.forEach(r => {
+          if(!avg7d[r.option_id]) avg7d[r.option_id]={views:0,qty:0,cr:0,days:new Set()};
+          const a = avg7d[r.option_id];
+          a.views += (r.views||0);
+          a.qty += (r.sales_qty||0);
+          a.cr += (r.conversion_rate||0);
+          a.days.add(r.report_date);
+        });
+        const viewsAvgMap = {}, qtyAvgMap = {}, crAvgMap = {};
+        Object.entries(avg7d).forEach(([oid,a]) => {
+          const days = a.days.size || 1;
+          viewsAvgMap[oid] = a.views / days;
+          qtyAvgMap[oid] = a.qty / days;
+          crAvgMap[oid] = a.cr / days;
+        });
+
+        // 계정 맵 + 상품링크 맵 + fulfillment맵
+        const acctMap = {}; const linkMap = {}; const ftMap = {};
+        prods.forEach(p => {
+          if(p.account) acctMap[p.option_id]=p.account;
+          if(p.vendor_item_id && p.option_id)
+            linkMap[p.option_id]=`https://www.coupang.com/vp/products/${p.vendor_item_id}?vendorItemId=${p.option_id}`;
+          if(p.fulfillment_type) ftMap[p.option_id]=p.fulfillment_type;
+        });
+        margin.forEach(m => { if(m.account) acctMap[m.option_id]=m.account; });
+        if(isRealtime) sales.forEach(r => { if(r.account) acctMap[r.option_id]=r.account; });
+
+        // 재고 맵 + 아이템위너 맵 + 판매속도 맵
+        const invMap = {}; const winnerMap = {}; const sales7dMap = {}; const sales30dMap = {};
+        inv.forEach(i => { invMap[i.option_id]=(i.stock||0); winnerMap[i.option_id]=i.is_item_winner; sales7dMap[i.option_id]=i.sales_7d||0; sales30dMap[i.option_id]=i.sales_30d||0; });
+        // 원가 맵 (option_id → 최신 cost) — 이미 start_date desc로 정렬됨
+        const costMap = {};
+        costData.forEach(c => { if(!costMap[c.option_id]) costMap[c.option_id]=c.cost||0; });
+        // 환율 맵 (option_id → 최신 exchange_rate)
+        const exRateMap = {};
+        exRateData.forEach(e => { if(!exRateMap[e.option_id]) exRateMap[e.option_id]=Number(e.exchange_rate)||1; });
+
+        // 광고: option_id별 합산 + 키워드 맵 (상세 데이터 포함)
+        const adMap = {};
+        const kwMap = {}; // option_id → [keyword_name]
+        const kwDetailMap = {}; // "option_id|keyword" → {ad_cost, impressions, clicks, orders, qty}
+        adsRaw.forEach(a => {
+          if(!adMap[a.option_id]) adMap[a.option_id]={ad_cost:0,sales_qty_1d:0};
+          adMap[a.option_id].ad_cost += (a.ad_cost||0);
+          adMap[a.option_id].sales_qty_1d += (a.sales_qty_1d||0);
+          // 키워드별 상세 데이터 합산
+          const kwKey = a.option_id+"|"+(a.keyword||"-");
+          if(!kwDetailMap[kwKey]) kwDetailMap[kwKey]={ad_cost:0,impressions:0,clicks:0,orders:0,qty:0};
+          const kd = kwDetailMap[kwKey];
+          kd.ad_cost += (a.ad_cost||0);
+          kd.impressions += (a.impressions||0);
+          kd.clicks += (a.clicks||0);
+          kd.orders += (a.orders_1d||0);
+          kd.qty += (a.sales_qty_1d||0);
+          if((a.sales_qty_1d||0)>0) {
+            if(!kwMap[a.option_id]) kwMap[a.option_id]=[];
+            kwMap[a.option_id].push(a.keyword);
+          }
+        });
+        const mMap = {};
+        margin.forEach(m => mMap[m.option_id] = m);
+        // products 테이블에서 상품명/옵션명 보충 (margin에 없는 옵션)
+        prods.forEach(p => {
+          if(!mMap[p.option_id]) {
+            if(p.product_name) {
+              mMap[p.option_id] = {product_name:p.product_name, option_name:p.option_name||"-",
+                account:p.account, revenue:null, margin:null, margin_rate:null};
+            }
+          }
+        });
+        // 실시간 모드: sales_realtime에서 revenue 직접 사용
+        if(isRealtime) {
+          sales.forEach(r => {
+            const m = mMap[r.option_id];
+            if(m) m.revenue = r.revenue||0;
+          });
+        }
+
+        // 계정 목록 추출
+        const acctSet = new Set();
+        sales.forEach(row => { const a=acctMap[row.option_id]; if(a) acctSet.add(a); });
+        setAccounts([...acctSet].sort());
+
+        // 옵션 병합: 같은 product_name + option_name → 한 행 (윙+그로스 합산)
+        const grouped = {};
+        const mergeMap = {}; // key: "pName|optName" → merged opt object
+        sales.forEach(row => {
+          const m = mMap[row.option_id]||{};
+          const pName = m.product_name||row.option_id;
+          const optName = m.option_name||"-";
+          const ad = adMap[row.option_id]||{};
+          const revenue = m.revenue!=null ? m.revenue : (row.revenue||0);
+          const netProfit = m.margin!=null ? (m.margin*(row.sales_qty||0)) : null;
+          const account = acctMap[row.option_id]||"-";
+          const stock = invMap[row.option_id];
+          const ft = ftMap[row.option_id]||"";
+          const isWing = ft==="윙";
+          const isRocketNotWinner = ft==="로켓그로스" && winnerMap[row.option_id]===false && (stock||0)>0;
+          const link = linkMap[row.option_id]||null;
+          const viewsAvg7d = viewsAvgMap[row.option_id]||null;
+          const qtyAvg7d = qtyAvgMap[row.option_id]||null;
+          const crAvg7d = crAvgMap[row.option_id]||null;
+
+          if(!grouped[pName]) grouped[pName]={pName, opts:[], rev:0, qty:0, adCost:0, profit:0, views:0, account};
+
+          const mergeKey = `${pName}|${optName}`;
+          if(mergeMap[mergeKey]) {
+            // 기존 병합 옵션에 합산
+            const o = mergeMap[mergeKey];
+            o.views = (o.views||0) + (row.views||0);
+            o.sales_qty = (o.sales_qty||0) + (row.sales_qty||0);
+            o.revenue = (o.revenue||0) + revenue;
+            o.adCost = (o.adCost||0) + (ad.ad_cost||0);
+            o.adQty = (o.adQty||0) + (ad.sales_qty_1d||0);
+            if(netProfit!=null) o.netProfit = (o.netProfit||0) + netProfit;
+            o.stock = (o.stock!=null||stock!=null) ? (o.stock||0)+(stock||0) : null;
+            if(viewsAvg7d) o.viewsAvg7d = (o.viewsAvg7d||0) + viewsAvg7d;
+            if(qtyAvg7d) o.qtyAvg7d = (o.qtyAvg7d||0) + qtyAvg7d;
+            if(crAvg7d) o.crAvg7d = Math.max(o.crAvg7d||0, crAvg7d);
+            o.cancel_qty = (o.cancel_qty||0) + (row.cancel_qty||0);
+            o.sales7d = (o.sales7d||0) + (sales7dMap[row.option_id]||0);
+            o.sales30d = (o.sales30d||0) + (sales30dMap[row.option_id]||0);
+            if(!o.unitCost && costMap[row.option_id]) o.unitCost = costMap[row.option_id];
+            if(!o.exRate && exRateMap[row.option_id]) o.exRate = exRateMap[row.option_id];
+            if(isWing) { o.wingQty = (o.wingQty||0) + (row.sales_qty||0); }
+            if(isRocketNotWinner) o.rocketNotWinner = true;
+            if(!isWing && link) o.link = link;
+            o.optionIds.push(row.option_id);
+            if(kwMap[row.option_id]) o.keywords = [...(o.keywords||[]), ...kwMap[row.option_id]];
+            // kwDetails 병합
+            Object.entries(kwDetailMap).filter(([k])=>k.startsWith(row.option_id+"|")).forEach(([k,v])=>{
+              const kw=k.split("|")[1]; if(!o.kwDetails) o.kwDetails={};
+              if(!o.kwDetails[kw]) o.kwDetails[kw]={ad_cost:0,impressions:0,clicks:0,orders:0,qty:0};
+              const d=o.kwDetails[kw]; d.ad_cost+=v.ad_cost; d.impressions+=v.impressions; d.clicks+=v.clicks; d.orders+=v.orders; d.qty+=v.qty;
+            });
+            // 히스토리 합산
+            const hv=getHist(row.option_id,"views"), hq=getHist(row.option_id,"qty"), hs=getHist(row.option_id,"stock"), ha=getHist(row.option_id,"adCost"), hr=getHist(row.option_id,"revenue");
+            if(o.histViews) o.histViews=o.histViews.map((d,i)=>({dt:d.dt,v:d.v+(hv[i]?.v||0)}));
+            if(o.histQty) o.histQty=o.histQty.map((d,i)=>({dt:d.dt,v:d.v+(hq[i]?.v||0)}));
+            if(o.histStock) o.histStock=o.histStock.map((d,i)=>({dt:d.dt,v:d.v+(hs[i]?.v||0)}));
+            if(o.histAdCost) o.histAdCost=o.histAdCost.map((d,i)=>({dt:d.dt,v:d.v+(ha[i]?.v||0)}));
+            if(o.histRevenue) o.histRevenue=o.histRevenue.map((d,i)=>({dt:d.dt,v:d.v+(hr[i]?.v||0)}));
+            const hc=getHist(row.option_id,"cancel");
+            if(o.histCancel) o.histCancel=o.histCancel.map((d,i)=>({dt:d.dt,v:d.v+(hc[i]?.v||0)}));
+          } else {
+            const opt = {...row, revenue, optName, adCost:ad.ad_cost||0,
+              adQty:ad.sales_qty_1d||0, margin:m.margin, marginRate:m.margin_rate, netProfit, account, stock,
+              link: isWing ? null : link, viewsAvg7d, qtyAvg7d, crAvg7d,
+              wingQty: isWing ? (row.sales_qty||0) : 0,
+              rocketNotWinner: isRocketNotWinner,
+              sales7d: sales7dMap[row.option_id]||0, sales30d: sales30dMap[row.option_id]||0,
+              unitCost: costMap[row.option_id]||0, exRate: exRateMap[row.option_id]||1,
+              optionIds: [row.option_id],
+              keywords: kwMap[row.option_id] ? [...kwMap[row.option_id]] : [],
+              kwDetails: Object.fromEntries(Object.entries(kwDetailMap).filter(([k])=>k.startsWith(row.option_id+"|")).map(([k,v])=>[k.split("|")[1],v])),
+              histViews: getHist(row.option_id,"views"),
+              histQty: getHist(row.option_id,"qty"),
+              histCr: getHist(row.option_id,"cr"),
+              histStock: getHist(row.option_id,"stock"),
+              histAdCost: getHist(row.option_id,"adCost"),
+              histRevenue: getHist(row.option_id,"revenue"),
+              histCancel: getHist(row.option_id,"cancel")};
+            if(isWing && link) opt._wingLink = link; // 윙 링크 백업
+            mergeMap[mergeKey] = opt;
+            grouped[pName].opts.push(opt);
+          }
+
+          grouped[pName].rev += revenue;
+          grouped[pName].qty += (row.sales_qty||0);
+          grouped[pName].views += (row.views||0);
+          grouped[pName].adCost += (ad.ad_cost||0);
+          if(netProfit!=null) grouped[pName].profit += netProfit;
+        });
+        // 로켓그로스 링크 없으면 윙 링크 사용
+        Object.values(mergeMap).forEach(o => { if(!o.link && o._wingLink) o.link = o._wingLink; });
+
+        const result = Object.values(grouped).sort((a,b)=>b.rev-a.rev);
+        result.forEach(g => g.opts = sortOpts(g.opts));
+        setRows(result);
+        if(onLoad) onLoad(result);
+      } catch(e){ setErr(e.message); }
+    })();
+  }, [date, endDate, rangeMode, activeTab]);
+
+  const toggle = name => setExp(p=>({...p,[name]:!p[name]}));
+  const allExpanded = rows && rows.length>0 && rows.every(g=>exp[g.pName]);
+  const toggleAll = () => {
+    if(allExpanded) setExp({});
+    else { const next={}; rows.forEach(g=>next[g.pName]=true); setExp(next); }
+  };
+
+  if (err) return <ErrBox msg={err}/>;
+  if (!rows) return <Spinner/>;
+  if (rows.length === 0) return <div style={{...s.card,color:C.textDim,textAlign:"center",fontSize:"12px",padding:"32px"}}>해당 날짜 판매 데이터 없음</div>;
+
+  let filtered = acctFilter==="ALL" ? rows : rows.filter(g=>g.account===acctFilter||g.opts.some(o=>o.account===acctFilter));
+  if(salesOnly && !invMode) filtered = filtered.map(g=>({...g,opts:g.opts.filter(o=>(o.sales_qty||0)!==0||Math.abs(o.cancel_qty||0)>0||(o.adCost||0)>0)})).filter(g=>g.opts.length>0);
+  // 숨김 필터: edit모드에서는 전부 보여주고, show면 전부, hide면 숨김 제외
+  if(hideMode==="hide") filtered = filtered.map(g=>({...g,opts:g.opts.filter(o=>!(o.optionIds||[o.option_id]).some(id=>hiddenSet.has(id)))})).filter(g=>g.opts.length>0);
+  // 필터된 rows에서 합계 계산
+  const totals = filtered.reduce((t,g)=>{
+    // 계정 필터가 걸려있으면 해당 계정 옵션만 합산
+    if(acctFilter!=="ALL") {
+      const opts = g.opts.filter(o=>o.account===acctFilter);
+      opts.forEach(o=>{
+        t.views+=(o.views||0); t.qty+=(o.sales_qty||0); t.rev+=(o.revenue||0);
+        t.adCost+=(o.adCost||0); t.adQty+=(o.adQty||0); t.cancel+=Math.abs(o.cancel_qty||0);
+        if(o.netProfit!=null) t.profit+=o.netProfit;
+      });
+    } else {
+      t.views+=g.views; t.qty+=g.qty; t.rev+=g.rev;
+      t.adCost+=g.adCost; t.profit+=g.profit;
+      t.adQty+=g.opts.reduce((s,o)=>s+(o.adQty||0),0);
+      t.cancel+=g.opts.reduce((s,o)=>s+Math.abs(o.cancel_qty||0),0);
+    }
+    return t;
+  },{views:0,qty:0,rev:0,adCost:0,adQty:0,profit:0,cancel:0});
+
+  return <div style={s.card}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <AcctButtons accounts={accounts} current={acctFilter} onChange={setAcctFilter}/>
+      <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        <button onClick={()=>setHideMode(m=>m==="hide"?"show":m==="show"?"edit":"hide")}
+          style={{...acctBtnStyle(hideMode!=="hide"),fontSize:"10px",padding:"3px 10px",
+            color:hideMode==="edit"?C.red:hideMode==="show"?C.yellow:C.textDim,
+            borderColor:hideMode==="edit"?C.red:hideMode==="show"?C.yellow:C.border}}>
+          {hideMode==="edit"?"숨김 설정":hideMode==="show"?"숨김 표시":"숨김"}
+        </button>
+        <button onClick={()=>{setKwMode(p=>!p);if(!kwMode)setInvMode(false);}} style={{...acctBtnStyle(kwMode),fontSize:"10px",padding:"3px 10px"}}>키워드</button>
+        <button onClick={()=>{setInvMode(p=>!p);if(!invMode)setKwMode(false);}} style={{...acctBtnStyle(invMode),fontSize:"10px",padding:"3px 10px",color:invMode?C.green:C.textDim,borderColor:invMode?C.green:C.border}}>재고관리</button>
+        <button onClick={()=>setSalesOnly(p=>!p)} style={{...acctBtnStyle(salesOnly),fontSize:"10px",padding:"3px 10px"}}>{salesOnly?"판매만":"전체"}</button>
+        <button onClick={toggleAll} style={{...acctBtnStyle(false),fontSize:"10px",padding:"3px 10px"}}>{allExpanded?"모두 접기":"모두 펼치기"}</button>
+      </div>
+    </div>
+    <table style={s.tbl}>
+      <thead><tr>
+        <th style={s.thL}>상품명 / 옵션</th>
+        {kwMode ? <th style={{...s.th,textAlign:"left"}}>판매 키워드</th>
+        : invMode ? <>
+        <th style={s.th}>재고</th><th style={s.th}>입고</th><th style={s.th}>주문</th>
+        <th style={s.th}>총재고</th><th style={s.th}>2주후재고</th>
+        <th style={s.th}>필요주문량</th><th style={s.th}>주문금액</th></>
+        : <>{<th style={s.th}>재고</th>}
+        <th style={s.th}>조회수</th><th style={s.th}>전환율</th>
+        <th style={s.th}>판매량</th><th style={s.th}>취소</th><th style={s.th}>매출</th>
+        <th style={s.th}>광고판매</th><th style={s.th}>광고비</th>
+        <th style={s.th}>순이익</th><th style={s.th}>마진율</th></>}
+      </tr></thead>
+      <tbody>
+        {kwMode ? <tr style={{background:C.accentDim}}>
+          <td style={{...s.tdL,fontWeight:700,color:C.accent}}>합계</td>
+          <td style={{...s.td,textAlign:"left"}}>{(()=>{
+            const roas = totals.adCost>0 ? (totals.rev/totals.adCost*100).toFixed(0) : 0;
+            const adRatio = totals.rev>0 ? (totals.adCost/totals.rev*100).toFixed(1) : 0;
+            return <span style={{fontSize:"11px"}}>
+              <span style={{color:C.yellow}}>광고비 {fmtWon(totals.adCost)}</span>
+              <span style={{color:C.border,margin:"0 8px"}}>|</span>
+              <span style={{color:C.text}}>ROAS {roas}%</span>
+              <span style={{color:C.border,margin:"0 8px"}}>|</span>
+              <span style={{color:C.text}}>광고비율 {adRatio}%</span>
+              <span style={{color:C.border,margin:"0 8px"}}>|</span>
+              <span style={{color:C.yellow}}>광고판매 {fmtNum(totals.adQty)}건</span>
+            </span>;
+          })()}</td>
+        </tr>
+        : invMode ? (()=>{
+          const tStock=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>s2+(o.stock||0),0),0);
+          const tInc=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>s2+((stockManual[(o.optionIds||[o.option_id])[0]]||{}).incoming||0),0),0);
+          const tOrd=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>s2+((stockManual[(o.optionIds||[o.option_id])[0]]||{}).ordered||0),0),0);
+          const tTotal=tStock+tInc+tOrd;
+          const tS30d=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>s2+(o.sales30d||0),0),0);
+          const tS7d=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>s2+(o.sales7d||0),0),0);
+          const tRemain30=Math.round(tTotal-(tS30d/30)*14), tRemain7=Math.round(tTotal-(tS7d/7)*14);
+          const tNeed30=Math.max(0,Math.round((tS30d/30)*14-tTotal)), tNeed7=Math.max(0,Math.round((tS7d/7)*14-tTotal));
+          const tCost=filtered.reduce((s,g)=>s+g.opts.reduce((s2,o)=>{
+            const oid=(o.optionIds||[o.option_id])[0];
+            const sm2=stockManual[oid]||{incoming:0,ordered:0};
+            const ts=(o.stock||0)+(sm2.incoming||0)+(sm2.ordered||0);
+            const need=Math.max(0,Math.round(((o.sales30d||0)/30)*14-ts));
+            return s2+Math.round(need*(o.unitCost||0)*(o.exRate||1));
+          },0),0);
+          return <tr style={{background:C.accentDim}}>
+            <td style={{...s.tdL,fontWeight:700,color:C.accent}}>합계</td>
+            <td style={{...s.td,fontWeight:600}}>{fmtNum(tStock)}</td>
+            <td style={s.td}>{tInc>0?fmtNum(tInc):<span style={{color:C.muted}}>-</span>}</td>
+            <td style={s.td}>{tOrd>0?fmtNum(tOrd):<span style={{color:C.muted}}>-</span>}</td>
+            <td style={{...s.td,fontWeight:700}}>{fmtNum(tTotal)}</td>
+            <td style={{...s.td,color:tRemain30<0?C.red:tRemain30<10?C.yellow:C.green}}>
+              {tRemain30}<span style={{fontSize:"9px",color:C.textDim}}>({tRemain7})</span>
+            </td>
+            <td style={{...s.td,color:tNeed30>0?C.yellow:C.muted}}>
+              {tNeed30>0?<span>{fmtNum(tNeed30)}<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(tNeed7)})</span></span>:<span style={{color:C.muted}}>-</span>}
+            </td>
+            <td style={s.td}>{tCost>0?fmtWon(tCost):<span style={{color:C.muted}}>-</span>}</td>
+          </tr>;
+        })()
+        : <tr style={{background:C.accentDim}}>
+          <td style={{...s.tdL,fontWeight:700,color:C.accent}}>합계</td>
+          <td style={s.td}>—</td>
+          <td style={{...s.td,fontWeight:600}}>{fmtNum(totals.views)}</td>
+          <td style={s.td}>{totals.views>0?fmtPct((totals.qty/totals.views)*100):"-"}</td>
+          <td style={{...s.td,fontWeight:700}}>{fmtNum(totals.qty)}</td>
+          <td style={s.td}>{totals.cancel?<span>{-Math.abs(totals.cancel)}</span>:"-"}</td>
+          <td style={{...s.td,color:C.accent,fontWeight:700}}>{fmtWon(totals.rev)}</td>
+          <td style={s.td}>{totals.adQty>0?<span style={{color:C.yellow}}>{fmtNum(totals.adQty)}건</span>:<span style={{color:C.muted}}>-</span>}</td>
+          <td style={s.td}>{totals.adCost>0?<span style={{color:C.yellow}}>{fmtWon(totals.adCost)}</span>:<span style={{color:C.muted}}>-</span>}</td>
+          <td style={{...s.td,color:totals.profit>0?C.green:C.red,fontWeight:700}}>{fmtWon(totals.profit)}</td>
+          <td style={s.td}>{totals.rev>0?fmtPct((totals.profit/totals.rev)*100):"-"}</td>
+        </tr>}
+        {filtered.map(g => {
+          const open = exp[g.pName];
+          const displayOpts = acctFilter==="ALL" ? g.opts : g.opts.filter(o=>o.account===acctFilter);
+          const visibleOpts = hideMode==="hide" ? displayOpts.filter(o=>!(o.optionIds||[o.option_id]).some(id=>hiddenSet.has(id))) : displayOpts;
+          const gViews = visibleOpts.reduce((s,o)=>s+(o.views||0),0);
+          const gQty = visibleOpts.reduce((s,o)=>s+(o.sales_qty||0),0);
+          const gRev = visibleOpts.reduce((s,o)=>s+(o.revenue||0),0);
+          const gAdCost = visibleOpts.reduce((s,o)=>s+(o.adCost||0),0);
+          const gAdQty = visibleOpts.reduce((s,o)=>s+(o.adQty||0),0);
+          const gCancel = visibleOpts.reduce((s,o)=>s+(o.cancel_qty||0),0);
+          const gWingQty = visibleOpts.reduce((s,o)=>s+(o.wingQty||0),0);
+          const gProfit = visibleOpts.reduce((s,o)=>s+(o.netProfit||0),0);
+          const gStock = visibleOpts.reduce((s,o)=>s+(o.stock!=null?o.stock:0),0);
+          const hasStock = visibleOpts.some(o=>o.stock!=null);
+          const gViewsAvg = visibleOpts.reduce((s,o)=>s+(o.viewsAvg7d||0),0);
+          const gViewsDown = gViewsAvg>0 && gViews<gViewsAvg;
+          const gQtyAvg = visibleOpts.reduce((s,o)=>s+(o.qtyAvg7d||0),0);
+          const gQtyDown = gQtyAvg>0 && gQty<gQtyAvg;
+          const gCrAvg = visibleOpts.reduce((s,o)=>s+(o.crAvg7d||0),0) / (visibleOpts.length||1);
+          const gCr = gViews>0 ? (gQty/gViews)*100 : 0;
+          const gCrDown = gCrAvg>0 && gCr<gCrAvg;
+          // 상품 그룹 히스토리: 옵션별 히스토리 합산
+          const mergeHist = (field) => {
+            const opts = visibleOpts.filter(o=>o[field]&&o[field].length>0);
+            if(opts.length===0) return null;
+            return opts[0][field].map((d,i)=>({dt:d.dt,v:opts.reduce((s,o)=>s+((o[field][i]||{}).v||0),0)}));
+          };
+          const gHistStock=mergeHist("histStock"), gHistViews=mergeHist("histViews"),
+                gHistQty=mergeHist("histQty"), gHistRev=mergeHist("histRevenue"),
+                gHistAdCost=mergeHist("histAdCost"), gHistCancel=mergeHist("histCancel");
+          // 그룹 전환율 히스토리: 날짜별 (합산qty/합산views)*100
+          const gHistCr = gHistViews && gHistQty ? gHistViews.map((d,i)=>({dt:d.dt,v:d.v>0?((gHistQty[i]?.v||0)/d.v)*100:0})) : null;
+          const allOptsHidden = displayOpts.length>0 && displayOpts.every(o=>(o.optionIds||[o.option_id]).some(id=>hiddenSet.has(id)));
+          const toggleProductHidden = (e) => {
+            e.stopPropagation();
+            const ids = displayOpts.flatMap(o=>o.optionIds||[o.option_id]);
+            if(allOptsHidden) ids.forEach(id=>toggleHidden(id));
+            else ids.filter(id=>!hiddenSet.has(id)).forEach(id=>toggleHidden(id));
+          };
+          return [
+            <tr key={g.pName} onClick={()=>toggle(g.pName)} style={{cursor:"pointer"}}>
+              <td style={s.tdL}>
+                {hideMode==="edit"&&<input type="checkbox" checked={allOptsHidden}
+                  onChange={toggleProductHidden} onClick={e=>e.stopPropagation()}
+                  style={{marginRight:"8px",cursor:"pointer",accentColor:C.red}}/>}
+                <span style={{color:C.accent,marginRight:"8px",fontSize:"10px",fontWeight:700}}>
+                  {open?"▼":"▶"}
+                </span>
+                <span style={{fontWeight:600}}>{g.pName}</span>
+                <span style={{marginLeft:"8px"}}>{badge(C.accent,`${visibleOpts.length}옵션`)}</span>
+              </td>
+              {kwMode ? <td style={{...s.td,textAlign:"left",color:C.textDim}}>—</td>
+              : invMode ? (()=>{
+                const gS7d=visibleOpts.reduce((s,o)=>s+(o.sales7d||0),0);
+                const gS30d=visibleOpts.reduce((s,o)=>s+(o.sales30d||0),0);
+                const gInc=visibleOpts.reduce((s,o)=>s+((stockManual[(o.optionIds||[o.option_id])[0]]||{}).incoming||0),0);
+                const gOrd=visibleOpts.reduce((s,o)=>s+((stockManual[(o.optionIds||[o.option_id])[0]]||{}).ordered||0),0);
+                const gTotal=gStock+gInc+gOrd;
+                const avg30=gS30d/30, avg7=gS7d/7;
+                const need14_30=avg30*14, need14_7=avg7*14;
+                const remain30=Math.round(gTotal-need14_30), remain7=Math.round(gTotal-need14_7);
+                const order30=Math.max(0,Math.round(need14_30-gTotal)), order7=Math.max(0,Math.round(need14_7-gTotal));
+                return <>
+                <td style={{...s.td,color:!hasStock?C.muted:gStock===0?C.red:gStock<5?C.red:gStock<20?C.yellow:C.green,fontWeight:600}}>{!hasStock?"-":fmtNum(gStock)}</td>
+                <td style={s.td}>{gInc>0?fmtNum(gInc):<span style={{color:C.muted}}>-</span>}</td>
+                <td style={s.td}>{gOrd>0?fmtNum(gOrd):<span style={{color:C.muted}}>-</span>}</td>
+                <td style={{...s.td,fontWeight:600}}>{fmtNum(gTotal)}</td>
+                <td style={{...s.td,color:remain30<0?C.red:remain30<10?C.yellow:C.green}}>
+                  {remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span>
+                </td>
+                <td style={{...s.td,color:order30>0?C.yellow:C.muted}}>
+                  {order30>0?<span>{fmtNum(order30)}<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(order7)})</span></span>:<span style={{color:C.muted}}>-</span>}
+                </td>
+                <td style={s.td}>{(()=>{
+                  const totalCost=visibleOpts.reduce((s,o)=>{
+                    const oid=(o.optionIds||[o.option_id])[0];
+                    const sm2=stockManual[oid]||{incoming:0,ordered:0};
+                    const ts=((o.stock||0)+(sm2.incoming||0)+(sm2.ordered||0));
+                    const need=Math.max(0,Math.round(((o.sales30d||0)/30)*14-ts));
+                    return s+Math.round(need*(o.unitCost||0)*(o.exRate||1));
+                  },0);
+                  return totalCost>0?fmtWon(totalCost):<span style={{color:C.muted}}>-</span>;
+                })()}</td>
+                </>;
+              })()
+              : <><td style={{...s.td,color:!hasStock?C.muted:gStock===0?C.red:gStock<5?C.red:gStock<20?C.yellow:C.green,fontWeight:600}}>
+                <HoverTip hist={gHistStock} label="재고" fmt={fmtNum} selectedDate={date}>
+                  {!hasStock?"-":gStock===0?badge(C.red,"품절"):fmtNum(gStock)}
+                </HoverTip>
+              </td>
+              <td style={s.td}>
+                <HoverTip hist={gHistViews} label="조회수" fmt={fmtNum} selectedDate={date}>
+                  {fmtNum(gViews)}{gViewsDown?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:gViewsAvg>0&&gViews>gViewsAvg?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              <td style={s.td}>
+                <HoverTip hist={gHistCr} label="전환율" fmt={fmtPct} selectedDate={date}>
+                  {gViews>0?fmtPct((gQty/gViews)*100):"-"}{gCrDown?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:gCrAvg>0&&gCr>gCrAvg?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              <td style={{...s.td,fontWeight:600}}>
+                <HoverTip hist={gHistQty} label="판매수량" fmt={fmtNum} selectedDate={date}>
+                  {fmtNum(gQty)}{gQtyDown?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:gQtyAvg>0&&gQty>gQtyAvg?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              {(()=>{const gCancelAbs=Math.abs(gCancel); const gTotal=gQty+gCancelAbs; const gCancelRate=gTotal>0?(gCancelAbs/gTotal*100):0;
+                return <td style={{...s.td,color:gCancelRate>30?C.red:C.text}}>
+                  {gCancelAbs>0?<HoverTip hist={gHistCancel} label="취소" fmt={v=>`-${fmtNum(v)}`} selectedDate={date}
+                    subHist={gHistQty} subFmt={(cancel,qty)=>{const t=(qty||0)+cancel; return t>0?`(${fmtPct(cancel/t*100)})`:""}}>
+                    -{fmtNum(gCancelAbs)}<span style={{fontSize:"9px",color:C.textDim,marginLeft:"2px"}}>({fmtPct(gCancelRate)})</span>
+                  </HoverTip>:<span style={{color:C.muted}}>-</span>}
+                </td>;})()}
+              <td style={{...s.td,color:C.accent,fontWeight:700}}>
+                <HoverTip hist={gHistRev} label="매출" fmt={fmtWon} selectedDate={date}>
+                  {fmtWon(gRev)}
+                </HoverTip>
+              </td>
+              <td style={s.td}>{gAdCost>0?<span style={{color:C.yellow}}>{fmtNum(gAdQty)}건</span>:<span style={{color:C.muted}}>-</span>}</td>
+              <td style={s.td}>
+                <HoverTip hist={gHistAdCost} label="광고비" fmt={fmtWon} selectedDate={date}>
+                  {gAdCost>0?<span style={{color:C.yellow}}>{fmtWon(gAdCost)}</span>:<span style={{color:C.muted}}>-</span>}
+                </HoverTip>
+              </td>
+              <td style={{...s.td,color:gProfit>0?C.green:C.red,fontWeight:600}}>{fmtWon(gProfit)}</td>
+              <td style={{...s.td,color:gRev>0&&gProfit/gRev>0.2?C.green:gRev>0&&gProfit/gRev>0.1?C.yellow:C.red}}>{gRev>0?fmtPct((gProfit/gRev)*100):"-"}</td></>}
+            </tr>,
+            open && displayOpts.map(o => {
+              const oIds = o.optionIds||[o.option_id];
+              const isHidden = oIds.some(id=>hiddenSet.has(id));
+              return <tr key={oIds[0]} style={{background:C.surfaceHigh+"88",opacity:isHidden&&hideMode!=="edit"?0.35:1}}>
+              <td style={{...s.tdL,paddingLeft:"40px",color:C.textDim}}>
+                {hideMode==="edit"&&<input type="checkbox" checked={isHidden}
+                  onChange={()=>oIds.forEach(id=>toggleHidden(id))} onClick={e=>e.stopPropagation()}
+                  style={{marginRight:"8px",cursor:"pointer",accentColor:C.red}}/>}
+                ↳ {o.link
+                ? <a href={o.link} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()}
+                    style={{color:isHidden?C.muted:o.rocketNotWinner?C.orange:C.accent,textDecoration:isHidden?"line-through":"none",borderBottom:`1px dashed ${isHidden?C.muted:o.rocketNotWinner?C.orange:C.accent}44`}}>{o.optName}</a>
+                : <span style={{color:o.rocketNotWinner?C.orange:undefined,textDecoration:isHidden?"line-through":"none"}}>{o.optName}</span>}
+                {o.rocketNotWinner&&<span style={{fontSize:"8px",color:C.orange,marginLeft:"4px"}}>●</span>}</td>
+              {kwMode ? <td style={{...s.td,textAlign:"left"}}>
+                {(o.keywords||[]).length>0
+                  ? [...new Set(o.keywords)].map((kw,i)=><KwTip key={i} detail={(o.kwDetails||{})[kw||"-"]}>
+                      <span style={{display:"inline-block",fontSize:"10px",
+                      padding:"2px 8px",margin:"2px 4px 2px 0",borderRadius:"3px",cursor:"default",
+                      background:(!kw||kw==="-"?C.muted:C.yellow)+"18",color:!kw||kw==="-"?C.text:C.yellow,
+                      border:`1px solid ${(!kw||kw==="-"?C.muted:C.yellow)}33`}}>{!kw||kw==="-"?"비검색":kw}</span>
+                    </KwTip>)
+                  : <span style={{color:C.muted,fontSize:"10px"}}>키워드 판매 없음</span>}
+              </td>
+              : invMode ? (()=>{
+                const oid=oIds[0]; const sm=stockManual[oid]||{incoming:0,ordered:0};
+                const stk=o.stock||0; const inc=sm.incoming||0; const ord=sm.ordered||0;
+                const totalStk=stk+inc+ord;
+                const avg30=(o.sales30d||0)/30, avg7=(o.sales7d||0)/7;
+                const remain30=Math.round(totalStk-avg30*14), remain7=Math.round(totalStk-avg7*14);
+                const order30=Math.max(0,Math.round(avg30*14-totalStk)), order7=Math.max(0,Math.round(avg7*14-totalStk));
+                const uc=o.unitCost||0;
+                return <>
+                <td style={{...s.td,color:o.stock==null?C.muted:stk===0?C.red:stk<5?C.red:stk<20?C.yellow:C.green,fontWeight:600}}>
+                  {o.stock==null?"-":fmtNum(stk)}
+                </td>
+                <td style={s.td}><InvEditCell optionId={oid} field="incoming" value={inc} stockManual={stockManual} setStockManual={setStockManual}/></td>
+                <td style={s.td}><InvEditCell optionId={oid} field="ordered" value={ord} stockManual={stockManual} setStockManual={setStockManual}/></td>
+                <td style={{...s.td,fontWeight:600}}>{fmtNum(totalStk)}</td>
+                <td style={{...s.td,color:remain30<0?C.red:remain30<10?C.yellow:C.green}}>
+                  {remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span>
+                </td>
+                <td style={{...s.td,color:order30>0?C.yellow:C.muted}}>
+                  {order30>0?<span>{fmtNum(order30)}<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(order7)})</span></span>:<span style={{color:C.muted}}>-</span>}
+                </td>
+                <td style={s.td}>{order30>0?fmtWon(Math.round(order30*uc*(o.exRate||1))):<span style={{color:C.muted}}>-</span>}</td>
+                </>;
+              })()
+              : <><td style={{...s.td,color:o.stock==null?C.muted:o.stock===0?C.red:o.stock<5?C.red:o.stock<20?C.yellow:C.green,fontWeight:600}}>
+                <HoverTip hist={o.histStock} label="재고" fmt={fmtNum} selectedDate={date}>
+                  {o.stock==null?"-":o.stock===0?badge(C.red,"품절"):fmtNum(o.stock)}
+                </HoverTip>
+              </td>
+              <td style={s.td}>
+                <HoverTip hist={o.histViews} label="조회수" fmt={fmtNum} selectedDate={date}>
+                  {fmtNum(o.views)}{o.viewsAvg7d>0&&(o.views||0)<o.viewsAvg7d?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:o.viewsAvg7d>0&&(o.views||0)>o.viewsAvg7d?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              <td style={s.td}>
+                <HoverTip hist={o.histCr} label="전환율" fmt={fmtPct} selectedDate={date}>
+                  {fmtPct(o.conversion_rate)}{o.crAvg7d>0&&(o.conversion_rate||0)<o.crAvg7d?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:o.crAvg7d>0&&(o.conversion_rate||0)>o.crAvg7d?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              <td style={s.td}>
+                <HoverTip hist={o.histQty} label="판매수량" fmt={fmtNum} selectedDate={date}>
+                  {fmtNum(o.sales_qty)}{o.wingQty>0&&o.wingQty<(o.sales_qty||0)&&<span style={{fontSize:"9px",color:C.textDim}}>({o.wingQty})</span>}{o.qtyAvg7d>0&&(o.sales_qty||0)<o.qtyAvg7d?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:o.qtyAvg7d>0&&(o.sales_qty||0)>o.qtyAvg7d?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                </HoverTip>
+              </td>
+              {(()=>{const ac=Math.abs(o.cancel_qty||0); const total=(o.sales_qty||0)+ac; const rate=total>0?(ac/total*100):0;
+                return <td style={{...s.td,color:rate>30?C.red:C.text}}>
+                  {ac>0?<HoverTip hist={o.histCancel} label="취소" fmt={v=>`-${fmtNum(v)}`} selectedDate={date}
+                    subHist={o.histQty} subFmt={(cancel,qty)=>{const t=(qty||0)+cancel; return t>0?`(${fmtPct(cancel/t*100)})`:""}}>
+                    -{fmtNum(ac)}<span style={{fontSize:"9px",color:C.textDim,marginLeft:"2px"}}>({fmtPct(rate)})</span>
+                  </HoverTip>:<span style={{color:C.muted}}>-</span>}
+                </td>;})()}
+              <td style={s.td}>
+                <HoverTip hist={o.histRevenue} label="매출" fmt={fmtWon} selectedDate={date}>
+                  {fmtWon(o.revenue)}
+                </HoverTip>
+              </td>
+              <td style={s.td}>{o.adQty>0?<span style={{color:C.yellow}}>{fmtNum(o.adQty)}건</span>:<span style={{color:C.muted}}>-</span>}</td>
+              <td style={s.td}>
+                <HoverTip hist={o.histAdCost} label="광고비" fmt={fmtWon} selectedDate={date}>
+                  {o.adCost>0?<span style={{color:C.yellow}}>{fmtWon(o.adCost)}</span>:<span style={{color:C.muted}}>-</span>}
+                </HoverTip>
+              </td>
+              <td style={{...s.td,color:o.netProfit>0?C.green:o.netProfit!=null?C.red:C.muted}}>
+                {o.netProfit!=null?fmtWon(o.netProfit):"-"}
+              </td>
+              <td style={{...s.td,color:o.marginRate>20?C.green:o.marginRate>10?C.yellow:o.marginRate!=null?C.red:C.muted}}>
+                {fmtPct(o.marginRate)}
+              </td></>}
+            </tr>})
+          ];
+        })}
+      </tbody>
+    </table>
+  </div>;
+}
+
+// ── 날짜 슬라이더 ────────────────────────────────────
+function DateSlider({date, endDate, rangeMode, onDateChange, onEndDateChange, onRangeModeToggle}) {
+  const today = new Date();
+  const minDate = new Date(today); minDate.setDate(today.getDate()-60);
+  const maxDate = new Date(today); maxDate.setDate(today.getDate()-1);
+  const totalDays = Math.round((maxDate-minDate)/(86400000));
+
+  const dateToVal = (d) => {
+    const diff = Math.round((new Date(d)-minDate)/(86400000));
+    return Math.max(0,Math.min(totalDays,diff));
+  };
+  const valToDate = (v) => {
+    const d = new Date(minDate); d.setDate(minDate.getDate()+v);
+    return d.toISOString().split("T")[0];
+  };
+
+  const val = dateToVal(date);
+  const dateInputStyle = {background:C.surfaceHigh,color:C.text,border:`1px solid ${C.border}`,
+    borderRadius:"4px",padding:"3px 8px",fontSize:"11px",fontFamily:"'DM Mono',monospace",
+    outline:"none",cursor:"pointer",width:"130px"};
+
+  // ◀ [날짜] ===●=== [날짜] ▶  +  단일/기간 버튼
+  return <div style={{display:"flex",alignItems:"center",gap:"8px",flex:1}}>
+    <button onClick={()=>{const p=valToDate(Math.max(0,val-1)); onDateChange(p); if(!rangeMode) onEndDateChange(p);}}
+      style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,borderRadius:"4px",
+        padding:"2px 8px",fontSize:"14px",cursor:"pointer",lineHeight:1}}>◀</button>
+
+    <input type="date" value={date} onChange={e=>onDateChange(e.target.value)} style={dateInputStyle} />
+
+    {rangeMode && <span style={{color:C.textDim,fontSize:"11px"}}>~</span>}
+    {rangeMode && <input type="date" value={endDate||date} onChange={e=>onEndDateChange(e.target.value)} style={dateInputStyle} />}
+
+    <button onClick={()=>{const n=valToDate(Math.min(totalDays,val+1)); onDateChange(n); if(!rangeMode) onEndDateChange(n);}}
+      style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,borderRadius:"4px",
+        padding:"2px 8px",fontSize:"14px",cursor:"pointer",lineHeight:1}}>▶</button>
+
+    <button onClick={onRangeModeToggle}
+      style={{background:rangeMode?C.accent+"22":"transparent",border:`1px solid ${rangeMode?C.accent:C.border}`,
+        color:rangeMode?C.accent:C.textDim,borderRadius:"4px",padding:"3px 10px",
+        fontSize:"10px",cursor:"pointer",fontFamily:"'DM Mono',monospace",fontWeight:rangeMode?700:400,
+        whiteSpace:"nowrap"}}>{rangeMode?"기간":"단일"}</button>
+
+    {!rangeMode && date!==getYesterday() && <button onClick={()=>onDateChange(getYesterday())}
+      style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,
+        borderRadius:"4px",padding:"3px 8px",fontSize:"10px",cursor:"pointer",
+        fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap"}}>어제로</button>}
+  </div>;
+}
+
+// ── 메인 앱 ───────────────────────────────────────────
+function App() {
+  const [date, setDate] = useState(getYesterday());
+  const [endDate, setEndDate] = useState(getYesterday());
+  const [rangeMode, setRangeMode] = useState(false);
+  const [dashboardCtx, setDashboardCtx] = useState({});
+  const [activeTab, setActiveTab] = useState("yesterday");
+
+  // 기간 모드에서 사용할 날짜
+  const effectiveDate = date;
+  const effectiveEndDate = rangeMode ? endDate : date;
+
+  // 날짜 변경 시 endDate도 조정
+  const handleDateChange = (d) => {
+    setDate(d);
+    if(!rangeMode) setEndDate(d);
+    else if(new Date(d)>new Date(endDate)) setEndDate(d);
+  };
+
+  return <div style={{...s.app,display:"flex",flexDirection:"column"}}>
+    <div style={s.header}>
+      <div style={s.logo}>⬡ COUPANG WING / 운영 대시보드</div>
+      <div style={{display:"flex",alignItems:"center",gap:"8px",flex:1,marginLeft:"24px"}}>
+        <DateSlider date={date} endDate={endDate} rangeMode={rangeMode}
+          onDateChange={handleDateChange} onEndDateChange={setEndDate}
+          onRangeModeToggle={()=>{setRangeMode(p=>!p); if(!rangeMode) setEndDate(date);}} />
+      </div>
+    </div>
+    <div style={{display:"flex",flex:1}}>
+      <div style={{...s.main,flex:1,minWidth:0}}>
+        <div style={s.sec}>
+          <SecTitle n="01">{activeTab==="realtime"?"실시간 총집계":rangeMode?`기간 총집계 — ${date} ~ ${endDate}`:`일일 총집계 — ${date}`}</SecTitle>
+          <KPISection date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onTabChange={setActiveTab} onLoad={data=>setDashboardCtx(p=>({...p,kpi:data}))}/>
+        </div>
+        <div style={s.sec}>
+          <SecTitle n="02">{activeTab==="realtime"?"실시간 판매 상품":rangeMode?`판매 상품 — ${date} ~ ${endDate}`:`판매 상품 (클릭하여 옵션 펼치기)`}</SecTitle>
+          <YesterdaySales date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onLoad={data=>setDashboardCtx(p=>({...p,topProducts:data}))}/>
+        </div>
+      </div>
+      <ChatPanel context={{...dashboardCtx,yesterday:date}} yesterday={date}/>
+    </div>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
