@@ -614,7 +614,7 @@ ${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(func
 }
 
 // ── 섹션 1: KPI ───────────────────────────────────────
-function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange}) {
+function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, sec2Totals}) {
   const [rawData, setRawData] = useState(null);
   const [err, setErr] = useState(null);
   const [acctFilter, setAcctFilter] = useState("ALL");
@@ -752,7 +752,8 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange}) 
     </div>;
   }
 
-  // 어제 확정 탭 (기존 로직)
+  // 어제 확정 탭 — sec2Totals 우선 사용 (섹션 2와 일치)
+  const t = sec2Totals || null;
   const fMargin = acctFilter==="ALL" ? margin : margin.filter(r=>acctMap[r.option_id]===acctFilter);
   const fAds = acctFilter==="ALL" ? adsRaw : adsRaw.filter(r=>acctMap[r.option_id]===acctFilter);
 
@@ -763,11 +764,11 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange}) 
     adTotals[a.option_id].sales_qty_1d += (a.sales_qty_1d||0);
   });
 
-  const rev = fMargin.reduce((s,r)=>s+(r.revenue||0),0);
-  const qty = fMargin.reduce((s,r)=>s+(r.sales_qty||0),0);
-  const adCost = Object.values(adTotals).reduce((s,a)=>s+(a.ad_cost||0),0);
-  const adQty = Object.values(adTotals).reduce((s,a)=>s+(a.sales_qty_1d||0),0);
-  const totalMargin = fMargin.reduce((s,r)=>s+((r.margin||0)*(r.sales_qty||0)),0);
+  const rev = (t && acctFilter==="ALL") ? t.rev : fMargin.reduce((s,r)=>s+(r.revenue||0),0);
+  const qty = (t && acctFilter==="ALL") ? t.qty : fMargin.reduce((s,r)=>s+(r.sales_qty||0),0);
+  const adCost = (t && acctFilter==="ALL") ? t.adCost : Object.values(adTotals).reduce((s,a)=>s+(a.ad_cost||0),0);
+  const adQty = (t && acctFilter==="ALL") ? t.adQty : Object.values(adTotals).reduce((s,a)=>s+(a.sales_qty_1d||0),0);
+  const totalMargin = (t && acctFilter==="ALL") ? t.totalMargin : fMargin.reduce((s,r)=>s+((r.margin||0)*(r.sales_qty||0)),0);
   const adRatio = qty>0?((adQty/qty)*100).toFixed(1):0;
 
   const kpis = [
@@ -1153,7 +1154,15 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         const result = Object.values(grouped).sort((a,b)=>b.rev-a.rev);
         result.forEach(g => g.opts = sortOpts(g.opts));
         setRows(result);
-        if(onLoad) onLoad(result);
+        // 전체 합계 계산 (salesOnly 필터 전)
+        const allTotals = result.reduce((t,g)=>{
+          t.rev+=g.rev; t.qty+=g.qty; t.views+=g.views; t.adCost+=g.adCost; t.profit+=g.profit;
+          t.adQty+=g.opts.reduce((s,o)=>s+(o.adQty||0),0);
+          return t;
+        },{rev:0,qty:0,views:0,adCost:0,adQty:0,profit:0});
+        allTotals.adRatio = allTotals.qty>0?((allTotals.adQty/allTotals.qty)*100).toFixed(1):0;
+        allTotals.totalMargin = allTotals.profit;
+        if(onLoad) onLoad(result, allTotals);
       } catch(e){ setErr(e.message); }
     })();
   }, [date, endDate, rangeMode, activeTab]);
@@ -1566,6 +1575,7 @@ function App() {
   const [rangeMode, setRangeMode] = useState(false);
   const [dashboardCtx, setDashboardCtx] = useState({});
   const [activeTab, setActiveTab] = useState("yesterday");
+  const [sec2Totals, setSec2Totals] = useState(null);
 
   // 기간 모드에서 사용할 날짜
   const effectiveDate = date;
@@ -1591,11 +1601,11 @@ function App() {
       <div style={{...s.main,flex:1,minWidth:0}}>
         <div style={s.sec}>
           <SecTitle n="01">{activeTab==="realtime"?"실시간 총집계":rangeMode?`기간 총집계 — ${date} ~ ${endDate}`:`일일 총집계 — ${date}`}</SecTitle>
-          <KPISection date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onTabChange={setActiveTab} onLoad={data=>setDashboardCtx(p=>({...p,kpi:data}))}/>
+          <KPISection date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onTabChange={setActiveTab} sec2Totals={sec2Totals} onLoad={data=>setDashboardCtx(p=>({...p,kpi:data}))}/>
         </div>
         <div style={s.sec}>
           <SecTitle n="02">{activeTab==="realtime"?"실시간 판매 상품":rangeMode?`판매 상품 — ${date} ~ ${endDate}`:`판매 상품 (클릭하여 옵션 펼치기)`}</SecTitle>
-          <YesterdaySales date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onLoad={data=>setDashboardCtx(p=>({...p,topProducts:data}))}/>
+          <YesterdaySales date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onLoad={(data,totals)=>{setDashboardCtx(p=>({...p,topProducts:data})); if(totals) setSec2Totals(totals);}}/>
         </div>
       </div>
       <ChatPanel context={{...dashboardCtx,yesterday:date}} yesterday={date}/>
