@@ -630,11 +630,12 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange}) 
       : {"report_date=eq":date};
     (async () => {
       try {
+        const qFn = rangeMode ? sbQueryAll : sbQuery;
         const [margin, adsRaw, prods, sales] = await Promise.all([
-          sbQuery("margin_daily","option_id,revenue,margin,sales_qty,account",qDate),
-          sbQuery("ads_daily","option_id,ad_cost,sales_qty_1d",qDate),
+          qFn("margin_daily","option_id,revenue,margin,sales_qty,account",qDate),
+          qFn("ads_daily","option_id,ad_cost,sales_qty_1d",qDate),
           sbQueryAll("products","option_id,account",{}),
-          sbQuery("sales_daily","option_id,account",qDate),
+          qFn("sales_daily","option_id,account",qDate),
         ]);
         const acctMap = {};
         sales.forEach(r=>{ if(r.account) acctMap[r.option_id]=r.account; });
