@@ -854,9 +854,9 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData, marginHist] = await Promise.all([
           isRealtime
             ? sbQuery("sales_realtime","option_id,views,sales_qty,revenue,visitors,account,crawled_at",{})
-            : sbQuery("sales_daily","option_id,views,conversion_rate,sales_qty,cancel_qty",qDate),
-          isRealtime ? Promise.resolve([]) : sbQuery("ads_daily","option_id,ad_cost,sales_qty_1d,keyword,impressions,clicks,orders_1d",qDate),
-          isRealtime ? Promise.resolve([]) : sbQuery("margin_daily","option_id,product_name,option_name,margin,margin_rate,account,revenue",qDate),
+            : (rangeMode ? sbQueryAll : sbQuery)("sales_daily","option_id,views,conversion_rate,sales_qty,cancel_qty",qDate),
+          isRealtime ? Promise.resolve([]) : (rangeMode ? sbQueryAll : sbQuery)("ads_daily","option_id,ad_cost,sales_qty_1d,keyword,impressions,clicks,orders_1d",qDate),
+          isRealtime ? Promise.resolve([]) : (rangeMode ? sbQueryAll : sbQuery)("margin_daily","option_id,product_name,option_name,margin,margin_rate,account,revenue",qDate),
           sbQuery("inventory_snapshots","option_id,stock,is_item_winner,sales_7d,sales_30d",{"snapshot_date=eq":latestSnap}),
           sbQueryAll("products","option_id,account,product_id,vendor_item_id,fulfillment_type,product_name,option_name",{}),
           isRealtime ? Promise.resolve([]) : sbQueryAll("sales_daily","option_id,views,sales_qty,conversion_rate,revenue,cancel_qty,report_date",
@@ -876,6 +876,29 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
           sales.forEach(r => {
             r.conversion_rate = r.views>0 ? (r.sales_qty/r.views)*100 : 0;
           });
+        }
+
+        // 기간 모드: sales/ads를 option_id별로 사전 집계 (각 옵션이 1행이 되도록)
+        if(rangeMode && !isRealtime) {
+          const sAgg = {};
+          sales.forEach(r => {
+            if(!sAgg[r.option_id]) sAgg[r.option_id] = {option_id:r.option_id, views:0, sales_qty:0, cancel_qty:0, conversion_rate:0, _days:0};
+            const a = sAgg[r.option_id];
+            a.views += (r.views||0); a.sales_qty += (r.sales_qty||0);
+            a.cancel_qty += (r.cancel_qty||0); a.conversion_rate += (r.conversion_rate||0); a._days++;
+          });
+          Object.values(sAgg).forEach(a => { a.conversion_rate = a._days>0 ? a.conversion_rate/a._days : 0; });
+          sales = Object.values(sAgg);
+
+          const aAgg = {};
+          adsRaw.forEach(r => {
+            const key = r.option_id+"|"+(r.keyword||"-");
+            if(!aAgg[key]) aAgg[key] = {option_id:r.option_id, keyword:r.keyword, ad_cost:0, sales_qty_1d:0, impressions:0, clicks:0, orders_1d:0};
+            const a = aAgg[key];
+            a.ad_cost += (r.ad_cost||0); a.sales_qty_1d += (r.sales_qty_1d||0);
+            a.impressions += (r.impressions||0); a.clicks += (r.clicks||0); a.orders_1d += (r.orders_1d||0);
+          });
+          adsRaw = Object.values(aAgg);
         }
 
         // 7일 날짜 리스트 생성
@@ -983,7 +1006,30 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
           }
         });
         const mMap = {};
-        margin.forEach(m => mMap[m.option_id] = m);
+        if(rangeMode) {
+          // 기간 모드: option_id별 revenue/margin 합산
+          const mAgg = {};
+          margin.forEach(m => {
+            if(!mAgg[m.option_id]) mAgg[m.option_id] = {product_name:m.product_name, option_name:m.option_name,
+              account:m.account, revenue:0, marginSum:0, salesQty:0, days:0};
+            const a = mAgg[m.option_id];
+            a.revenue += (m.revenue||0);
+            a.marginSum += (m.margin||0) * 1; // 개당 마진 합산용
+            a.salesQty += 1; // margin_rate 평균용 카운트
+            a.days++;
+            // 가중 마진율: 합산은 나중에 revenue 기준으로 계산
+            if(!a._mrSum) a._mrSum = 0;
+            a._mrSum += (m.margin_rate||0) * (m.revenue||0);
+            a._revSum = (a._revSum||0) + (m.revenue||0);
+          });
+          Object.entries(mAgg).forEach(([oid, a]) => {
+            mMap[oid] = {product_name:a.product_name, option_name:a.option_name, account:a.account,
+              revenue:a.revenue, margin:a.days>0?a.marginSum/a.days:null,
+              margin_rate:a._revSum>0?a._mrSum/a._revSum:null};
+          });
+        } else {
+          margin.forEach(m => mMap[m.option_id] = m);
+        }
         // products 테이블에서 상품명/옵션명 보충 (margin에 없는 옵션)
         prods.forEach(p => {
           if(!mMap[p.option_id]) {
