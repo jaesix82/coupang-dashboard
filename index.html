@@ -97,6 +97,11 @@ async function sbUpsert(table, data, onConflict) {
 const fmtWon = n => n == null ? "-" : "₩" + Math.round(n).toLocaleString("ko-KR");
 const fmtNum = n => n == null ? "-" : Number(n).toLocaleString("ko-KR");
 const fmtPct = n => n == null ? "-" : Number(n).toFixed(1) + "%";
+function shiftDate(dateStr, days) {
+  const [y,m,d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m-1, d+days);
+  return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
+}
 
 // ── 컬러 팔레트 ───────────────────────────────────────
 const C = {
@@ -185,7 +190,7 @@ function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt}) {
       })}
       <div style={{borderTop:`1px solid ${C.border}`,marginTop:"4px",paddingTop:"4px",
         display:"flex",justifyContent:"space-between",color:C.yellow,fontWeight:600}}>
-        <span>7일 평균</span><span>{fmt(Math.round(avg*10)/10)}{subHist&&subFmt&&<span style={{color:C.textDim,marginLeft:"4px"}}>{subFmt(avg,subAvgs)}</span>}</span>
+        <span>{hist.length}일 평균</span><span>{fmt(Math.round(avg*10)/10)}{subHist&&subFmt&&<span style={{color:C.textDim,marginLeft:"4px"}}>{subFmt(avg,subAvgs)}</span>}</span>
       </div>
     </div>}
   </span>;
@@ -824,11 +829,14 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
           {"order":"snapshot_date.desc","limit":"1"});
         const latestSnap = snapMeta.length>0 ? snapMeta[0].snapshot_date : refDate;
 
-        // 7일 히스토리: 항상 어제 기준 최근 7일
-        const yd = new Date(getYesterday());
-        const d7start = new Date(yd); d7start.setDate(yd.getDate()-6);
-        const hist7start = d7start.toISOString().split("T")[0];
-        const hist7end = getYesterday();
+        // 7일 히스토리: 선택 날짜 기준 앞뒤 3일 (끝이면 앞 6일)
+        const selD = new Date(refDate+"T00:00:00");
+        const ydD = new Date(getYesterday()+"T00:00:00");
+        const daysAfterAvail = Math.round((ydD - selD) / 86400000);
+        const histAfter = Math.min(3, daysAfterAvail);
+        const histBefore = 6 - histAfter;
+        const hist7start = shiftDate(refDate, -histBefore);
+        const hist7end = shiftDate(refDate, histAfter);
 
         const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData] = await Promise.all([
           isRealtime
@@ -856,10 +864,10 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         }
 
         // 7일 날짜 리스트 생성
+        const totalHistDays = histBefore + histAfter + 1;
         const hist7dates = [];
-        for(let i=0;i<7;i++) {
-          const dd = new Date(d7start); dd.setDate(d7start.getDate()+i);
-          hist7dates.push(dd.toISOString().split("T")[0]);
+        for(let i=0;i<totalHistDays;i++) {
+          hist7dates.push(shiftDate(refDate, -histBefore+i));
         }
 
         // 히스토리 맵: histMap[option_id] = {views:[{dt,v},...], qty:[...], cr:[...], stock:[...], adCost:[...]}
@@ -937,9 +945,10 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         const kwMap = {}; // option_id → [keyword_name]
         const kwDetailMap = {}; // "option_id|keyword" → {ad_cost, impressions, clicks, orders, qty}
         adsRaw.forEach(a => {
-          if(!adMap[a.option_id]) adMap[a.option_id]={ad_cost:0,sales_qty_1d:0};
+          if(!adMap[a.option_id]) adMap[a.option_id]={ad_cost:0,sales_qty_1d:0,clicks:0};
           adMap[a.option_id].ad_cost += (a.ad_cost||0);
           adMap[a.option_id].sales_qty_1d += (a.sales_qty_1d||0);
+          adMap[a.option_id].clicks += (a.clicks||0);
           // 키워드별 상세 데이터 합산
           const kwKey = a.option_id+"|"+(a.keyword||"-");
           if(!kwDetailMap[kwKey]) kwDetailMap[kwKey]={ad_cost:0,impressions:0,clicks:0,orders:0,qty:0};
@@ -1009,6 +1018,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
             o.revenue = (o.revenue||0) + revenue;
             o.adCost = (o.adCost||0) + (ad.ad_cost||0);
             o.adQty = (o.adQty||0) + (ad.sales_qty_1d||0);
+            o.clicks = (o.clicks||0) + (ad.clicks||0);
             if(netProfit!=null) o.netProfit = (o.netProfit||0) + netProfit;
             o.stock = (o.stock!=null||stock!=null) ? (o.stock||0)+(stock||0) : null;
             if(viewsAvg7d) o.viewsAvg7d = (o.viewsAvg7d||0) + viewsAvg7d;
@@ -1041,7 +1051,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
             if(o.histCancel) o.histCancel=o.histCancel.map((d,i)=>({dt:d.dt,v:d.v+(hc[i]?.v||0)}));
           } else {
             const opt = {...row, revenue, optName, adCost:ad.ad_cost||0,
-              adQty:ad.sales_qty_1d||0, margin:m.margin, marginRate:m.margin_rate, netProfit, account, stock,
+              adQty:ad.sales_qty_1d||0, clicks:ad.clicks||0, margin:m.margin, marginRate:m.margin_rate, netProfit, account, stock,
               link: isWing ? null : link, viewsAvg7d, qtyAvg7d, crAvg7d,
               wingQty: isWing ? (row.sales_qty||0) : 0,
               rocketNotWinner: isRocketNotWinner,
@@ -1101,17 +1111,18 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
       const opts = g.opts.filter(o=>o.account===acctFilter);
       opts.forEach(o=>{
         t.views+=(o.views||0); t.qty+=(o.sales_qty||0); t.rev+=(o.revenue||0);
-        t.adCost+=(o.adCost||0); t.adQty+=(o.adQty||0); t.cancel+=Math.abs(o.cancel_qty||0);
+        t.adCost+=(o.adCost||0); t.adQty+=(o.adQty||0); t.clicks+=(o.clicks||0); t.cancel+=Math.abs(o.cancel_qty||0);
         if(o.netProfit!=null) t.profit+=o.netProfit;
       });
     } else {
       t.views+=g.views; t.qty+=g.qty; t.rev+=g.rev;
       t.adCost+=g.adCost; t.profit+=g.profit;
       t.adQty+=g.opts.reduce((s,o)=>s+(o.adQty||0),0);
+      t.clicks+=g.opts.reduce((s,o)=>s+(o.clicks||0),0);
       t.cancel+=g.opts.reduce((s,o)=>s+Math.abs(o.cancel_qty||0),0);
     }
     return t;
-  },{views:0,qty:0,rev:0,adCost:0,adQty:0,profit:0,cancel:0});
+  },{views:0,qty:0,rev:0,adCost:0,adQty:0,clicks:0,profit:0,cancel:0});
 
   return <div style={s.card}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1138,7 +1149,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         <th style={s.th}>총재고</th><th style={s.th}>2주후재고</th>
         <th style={s.th}>필요주문량</th><th style={s.th}>주문금액</th></>
         : <>{<th style={s.th}>재고</th>}
-        <th style={s.th}>조회수</th><th style={s.th}>전환율</th>
+        <th style={s.th}>조회(클릭)</th><th style={s.th}>전환율</th>
         <th style={s.th}>판매량</th><th style={s.th}>취소</th><th style={s.th}>매출</th>
         <th style={s.th}>광고판매</th><th style={s.th}>광고비</th>
         <th style={s.th}>순이익</th><th style={s.th}>마진율</th></>}
@@ -1194,7 +1205,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         : <tr style={{background:C.accentDim}}>
           <td style={{...s.tdL,fontWeight:700,color:C.accent}}>합계</td>
           <td style={s.td}>—</td>
-          <td style={{...s.td,fontWeight:600}}>{fmtNum(totals.views)}</td>
+          <td style={{...s.td,fontWeight:600}}>{fmtNum(totals.views)}{totals.clicks>0&&<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(totals.clicks)})</span>}</td>
           <td style={s.td}>{totals.views>0?fmtPct((totals.qty/totals.views)*100):"-"}</td>
           <td style={{...s.td,fontWeight:700}}>{fmtNum(totals.qty)}</td>
           <td style={s.td}>{totals.cancel?<span>{-Math.abs(totals.cancel)}</span>:"-"}</td>
@@ -1296,7 +1307,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
               </td>
               <td style={s.td}>
                 <HoverTip hist={gHistViews} label="조회수" fmt={fmtNum} selectedDate={date}>
-                  {fmtNum(gViews)}{gViewsDown?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:gViewsAvg>0&&gViews>gViewsAvg?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                  {fmtNum(gViews)}{(()=>{const gc=visibleOpts.reduce((s,o)=>s+(o.clicks||0),0); return gc>0?<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(gc)})</span>:null;})()}{gViewsDown?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:gViewsAvg>0&&gViews>gViewsAvg?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
                 </HoverTip>
               </td>
               <td style={s.td}>
@@ -1384,7 +1395,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
               </td>
               <td style={s.td}>
                 <HoverTip hist={o.histViews} label="조회수" fmt={fmtNum} selectedDate={date}>
-                  {fmtNum(o.views)}{o.viewsAvg7d>0&&(o.views||0)<o.viewsAvg7d?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:o.viewsAvg7d>0&&(o.views||0)>o.viewsAvg7d?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
+                  {fmtNum(o.views)}{(o.clicks||0)>0&&<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(o.clicks)})</span>}{o.viewsAvg7d>0&&(o.views||0)<o.viewsAvg7d?<span style={{fontSize:"9px",color:C.red,marginLeft:"4px"}}>▼</span>:o.viewsAvg7d>0&&(o.views||0)>o.viewsAvg7d?<span style={{fontSize:"9px",color:C.accent,marginLeft:"4px"}}>▲</span>:null}
                 </HoverTip>
               </td>
               <td style={s.td}>
@@ -1431,28 +1442,14 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
 
 // ── 날짜 슬라이더 ────────────────────────────────────
 function DateSlider({date, endDate, rangeMode, onDateChange, onEndDateChange, onRangeModeToggle}) {
-  const today = new Date();
-  const minDate = new Date(today); minDate.setDate(today.getDate()-60);
-  const maxDate = new Date(today); maxDate.setDate(today.getDate()-1);
-  const totalDays = Math.round((maxDate-minDate)/(86400000));
-
-  const dateToVal = (d) => {
-    const diff = Math.round((new Date(d)-minDate)/(86400000));
-    return Math.max(0,Math.min(totalDays,diff));
-  };
-  const valToDate = (v) => {
-    const d = new Date(minDate); d.setDate(minDate.getDate()+v);
-    return d.toISOString().split("T")[0];
-  };
-
-  const val = dateToVal(date);
+  const yesterday = getYesterday();
   const dateInputStyle = {background:C.surfaceHigh,color:C.text,border:`1px solid ${C.border}`,
     borderRadius:"4px",padding:"3px 8px",fontSize:"11px",fontFamily:"'DM Mono',monospace",
     outline:"none",cursor:"pointer",width:"130px"};
 
   // ◀ [날짜] ===●=== [날짜] ▶  +  단일/기간 버튼
   return <div style={{display:"flex",alignItems:"center",gap:"8px",flex:1}}>
-    <button onClick={()=>{const p=valToDate(Math.max(0,val-1)); onDateChange(p); if(!rangeMode) onEndDateChange(p);}}
+    <button onClick={()=>{const p=shiftDate(date,-1); onDateChange(p); if(!rangeMode) onEndDateChange(p);}}
       style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,borderRadius:"4px",
         padding:"2px 8px",fontSize:"14px",cursor:"pointer",lineHeight:1}}>◀</button>
 
@@ -1461,7 +1458,7 @@ function DateSlider({date, endDate, rangeMode, onDateChange, onEndDateChange, on
     {rangeMode && <span style={{color:C.textDim,fontSize:"11px"}}>~</span>}
     {rangeMode && <input type="date" value={endDate||date} onChange={e=>onEndDateChange(e.target.value)} style={dateInputStyle} />}
 
-    <button onClick={()=>{const n=valToDate(Math.min(totalDays,val+1)); onDateChange(n); if(!rangeMode) onEndDateChange(n);}}
+    <button onClick={()=>{const n=shiftDate(date,1); if(n<=yesterday){onDateChange(n); if(!rangeMode) onEndDateChange(n);}}}
       style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,borderRadius:"4px",
         padding:"2px 8px",fontSize:"14px",cursor:"pointer",lineHeight:1}}>▶</button>
 
