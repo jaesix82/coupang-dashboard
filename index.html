@@ -196,6 +196,19 @@ function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt}) {
   </span>;
 }
 
+// 간단 호버 툴팁
+function MiniTip({children, text}) {
+  const [show, setShow] = useState(false);
+  return <span style={{position:"relative",cursor:"default"}}
+    onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
+    {children}
+    {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
+      marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
+      borderRadius:"4px",padding:"4px 8px",boxShadow:"0 4px 12px rgba(0,0,0,0.5)",
+      fontSize:"10px",whiteSpace:"nowrap",color:C.yellow,fontWeight:600}}>{text}</div>}
+  </span>;
+}
+
 // 키워드 광고 상세 툴팁
 function KwTip({children, detail}) {
   const [show, setShow] = useState(false);
@@ -1338,7 +1351,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                   {gAdCost>0?<span style={{color:C.yellow}}>{fmtWon(gAdCost)}</span>:<span style={{color:C.muted}}>-</span>}
                 </HoverTip>
               </td>
-              <td style={{...s.td,color:gProfit>0?C.green:C.red,fontWeight:600}}><span style={{cursor:"default"}} title={gQty>0?"개당 "+fmtWon(Math.round(gProfit/gQty)):""}>{fmtWon(gProfit)}</span></td>
+              <td style={{...s.td,color:gProfit>0?C.green:C.red,fontWeight:600}}>{gQty>0?<MiniTip text={"개당 "+fmtWon(Math.round(gProfit/gQty))}>{fmtWon(gProfit)}</MiniTip>:fmtWon(gProfit)}</td>
               <td style={{...s.td,color:gRev>0&&gProfit/gRev>0.2?C.green:gRev>0&&gProfit/gRev>0.1?C.yellow:C.red}}>{gRev>0?fmtPct((gProfit/gRev)*100):"-"}</td></>}
             </tr>,
             open && displayOpts.map(o => {
@@ -1426,8 +1439,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                   {o.adCost>0?<span style={{color:C.yellow}}>{fmtWon(o.adCost)}</span>:<span style={{color:C.muted}}>-</span>}
                 </HoverTip>
               </td>
-              <td style={{...s.td,color:o.netProfit>0?C.green:o.netProfit!=null?C.red:C.muted,position:"relative"}}>
-                {o.netProfit!=null?<span style={{cursor:"default"}} title={"개당 "+fmtWon(o.margin)}>{fmtWon(o.netProfit)}</span>:"-"}
+              <td style={{...s.td,color:o.netProfit>0?C.green:o.netProfit!=null?C.red:C.muted}}>
+                {o.netProfit!=null?<MiniTip text={"개당 "+fmtWon(o.margin)}>{fmtWon(o.netProfit)}</MiniTip>:"-"}
               </td>
               <td style={{...s.td,color:o.marginRate>20?C.green:o.marginRate>10?C.yellow:o.marginRate!=null?C.red:C.muted}}>
                 {fmtPct(o.marginRate)}
