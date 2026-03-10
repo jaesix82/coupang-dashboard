@@ -851,7 +851,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         const hist7start = shiftDate(refDate, -histBefore);
         const hist7end = shiftDate(refDate, histAfter);
 
-        const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData] = await Promise.all([
+        const [sales, adsRaw, margin, inv, prods, sales7d, ads7d, invHist, costData, exRateData, marginHist] = await Promise.all([
           isRealtime
             ? sbQuery("sales_realtime","option_id,views,sales_qty,revenue,visitors,account,crawled_at",{})
             : sbQuery("sales_daily","option_id,views,conversion_rate,sales_qty,cancel_qty",qDate),
@@ -867,6 +867,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
             {"snapshot_date=gte":hist7start,"snapshot_date=lte":hist7end}),
           sbQuery("cost_history","option_id,cost",{"order":"start_date.desc"}),
           sbQuery("exchange_rate_history","option_id,exchange_rate",{"order":"start_date.desc"}),
+          isRealtime ? Promise.resolve([]) : sbQueryAll("margin_daily","option_id,margin_rate,report_date",
+            {"report_date=gte":hist7start,"report_date=lte":hist7end}),
         ]);
 
         // 실시간 모드: sales_realtime에서 revenue 직접 제공, conversion_rate 계산
@@ -886,7 +888,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         // 히스토리 맵: histMap[option_id] = {views:[{dt,v},...], qty:[...], cr:[...], stock:[...], adCost:[...]}
         const histMap = {};
         const ensureHist = (oid) => {
-          if(!histMap[oid]) histMap[oid]={views:{},qty:{},cr:{},stock:{},adCost:{},revenue:{},cancel:{}};
+          if(!histMap[oid]) histMap[oid]={views:{},qty:{},cr:{},stock:{},adCost:{},revenue:{},cancel:{},marginRate:{}};
         };
         sales7d.forEach(r => {
           ensureHist(r.option_id);
@@ -900,6 +902,10 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
         ads7d.forEach(r => {
           ensureHist(r.option_id);
           histMap[r.option_id].adCost[r.report_date] = (histMap[r.option_id].adCost[r.report_date]||0)+(r.ad_cost||0);
+        });
+        marginHist.forEach(r => {
+          ensureHist(r.option_id);
+          histMap[r.option_id].marginRate[r.report_date] = r.margin_rate||0;
         });
         invHist.forEach(r => {
           ensureHist(r.option_id);
@@ -1062,6 +1068,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
             if(o.histRevenue) o.histRevenue=o.histRevenue.map((d,i)=>({dt:d.dt,v:d.v+(hr[i]?.v||0)}));
             const hc=getHist(row.option_id,"cancel");
             if(o.histCancel) o.histCancel=o.histCancel.map((d,i)=>({dt:d.dt,v:d.v+(hc[i]?.v||0)}));
+            const hmr=getHist(row.option_id,"marginRate");
+            if(!o.histMarginRate) o.histMarginRate=hmr;
           } else {
             const opt = {...row, revenue, optName, adCost:ad.ad_cost||0,
               adQty:ad.sales_qty_1d||0, clicks:ad.clicks||0, margin:m.margin, marginRate:m.margin_rate, netProfit, account, stock,
@@ -1079,7 +1087,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
               histStock: getHist(row.option_id,"stock"),
               histAdCost: getHist(row.option_id,"adCost"),
               histRevenue: getHist(row.option_id,"revenue"),
-              histCancel: getHist(row.option_id,"cancel")};
+              histCancel: getHist(row.option_id,"cancel"),
+              histMarginRate: getHist(row.option_id,"marginRate")};
             if(isWing && link) opt._wingLink = link; // 윙 링크 백업
             mergeMap[mergeKey] = opt;
             grouped[pName].opts.push(opt);
@@ -1260,6 +1269,15 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 gHistAdCost=mergeHist("histAdCost"), gHistCancel=mergeHist("histCancel");
           // 그룹 전환율 히스토리: 날짜별 (합산qty/합산views)*100
           const gHistCr = gHistViews && gHistQty ? gHistViews.map((d,i)=>({dt:d.dt,v:d.v>0?((gHistQty[i]?.v||0)/d.v)*100:0})) : null;
+          // 그룹 마진율 히스토리: 옵션별 평균
+          const gHistMarginRate = (()=>{
+            const opts = visibleOpts.filter(o=>o.histMarginRate&&o.histMarginRate.length>0);
+            if(opts.length===0) return null;
+            return opts[0].histMarginRate.map((d,i)=>{
+              let sum=0,cnt=0; opts.forEach(o=>{const v=(o.histMarginRate[i]||{}).v||0; if(v){sum+=v;cnt++;}});
+              return {dt:d.dt, v:cnt>0?sum/cnt:0};
+            });
+          })();
           const allOptsHidden = displayOpts.length>0 && displayOpts.every(o=>(o.optionIds||[o.option_id]).some(id=>hiddenSet.has(id)));
           const toggleProductHidden = (e) => {
             e.stopPropagation();
@@ -1352,7 +1370,11 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 </HoverTip>
               </td>
               <td style={{...s.td,color:gProfit>0?C.green:C.red,fontWeight:600}}>{gQty>0?<MiniTip text={"개당 "+fmtWon(Math.round(gProfit/gQty))}>{fmtWon(gProfit)}</MiniTip>:fmtWon(gProfit)}</td>
-              <td style={{...s.td,color:gRev>0&&gProfit/gRev>0.2?C.green:gRev>0&&gProfit/gRev>0.1?C.yellow:C.red}}>{gRev>0?fmtPct((gProfit/gRev)*100):"-"}</td></>}
+              <td style={{...s.td,color:gRev>0&&gProfit/gRev>0.2?C.green:gRev>0&&gProfit/gRev>0.1?C.yellow:C.red}}>
+                <HoverTip hist={gHistMarginRate} label="마진율" fmt={fmtPct} selectedDate={date}>
+                  {gRev>0?fmtPct((gProfit/gRev)*100):"-"}
+                </HoverTip>
+              </td></>}
             </tr>,
             open && displayOpts.map(o => {
               const oIds = o.optionIds||[o.option_id];
@@ -1443,7 +1465,9 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 {o.netProfit!=null?<MiniTip text={"개당 "+fmtWon(o.margin)}>{fmtWon(o.netProfit)}</MiniTip>:"-"}
               </td>
               <td style={{...s.td,color:o.marginRate>20?C.green:o.marginRate>10?C.yellow:o.marginRate!=null?C.red:C.muted}}>
+                <HoverTip hist={o.histMarginRate} label="마진율" fmt={fmtPct} selectedDate={date}>
                 {fmtPct(o.marginRate)}
+                </HoverTip>
               </td></>}
             </tr>})
           ];
