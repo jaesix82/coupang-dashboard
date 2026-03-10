@@ -209,6 +209,34 @@ function MiniTip({children, text}) {
   </span>;
 }
 
+// 재고 주간 예측 툴팁 (1주/2주/3주후)
+function WeekForecastTip({children, rows}) {
+  const [show, setShow] = useState(false);
+  return <span style={{position:"relative",cursor:"default"}}
+    onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
+    {children}
+    {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
+      marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
+      borderRadius:"6px",padding:"8px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.5)",
+      fontSize:"10px",whiteSpace:"nowrap",minWidth:"140px"}}>
+      <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>예상 잔여재고</div>
+      <div style={{display:"flex",justifyContent:"space-between",gap:"12px",marginBottom:"4px",color:C.textDim,fontSize:"9px"}}>
+        <span></span><span>30일기준</span><span>7일기준</span>
+      </div>
+      {rows.map(r=>{
+        const c30=r.v30<0?C.red:r.v30<10?C.yellow:C.green;
+        const c7=r.v7<0?C.red:r.v7<10?C.yellow:C.green;
+        return <div key={r.label} style={{display:"flex",justifyContent:"space-between",gap:"12px",padding:"2px 0",
+          fontWeight:r.label==="2주후"?700:400,color:r.label==="2주후"?C.text:C.textDim}}>
+          <span>{r.label}</span>
+          <span style={{color:c30}}>{fmtNum(r.v30)}</span>
+          <span style={{color:c7}}>{fmtNum(r.v7)}</span>
+        </div>;
+      })}
+    </div>}
+  </span>;
+}
+
 // 키워드 광고 상세 툴팁
 function KwTip({children, detail}) {
   const [show, setShow] = useState(false);
@@ -1364,13 +1392,18 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 const need14_30=avg30*14, need14_7=avg7*14;
                 const remain30=Math.round(gTotal-need14_30), remain7=Math.round(gTotal-need14_7);
                 const order30=Math.max(0,Math.round(need14_30-gTotal)), order7=Math.max(0,Math.round(need14_7-gTotal));
+                const gWkRows=[
+                  {label:"1주후",v30:Math.round(gTotal-avg30*7),v7:Math.round(gTotal-avg7*7)},
+                  {label:"2주후",v30:remain30,v7:remain7},
+                  {label:"3주후",v30:Math.round(gTotal-avg30*21),v7:Math.round(gTotal-avg7*21)}
+                ];
                 return <>
                 <td style={{...s.td,color:!hasStock?C.muted:gStock===0?C.red:gStock<5?C.red:gStock<20?C.yellow:C.green,fontWeight:600}}>{!hasStock?"-":fmtNum(gStock)}</td>
                 <td style={s.td}>{gInc>0?fmtNum(gInc):<span style={{color:C.muted}}>-</span>}</td>
                 <td style={s.td}>{gOrd>0?fmtNum(gOrd):<span style={{color:C.muted}}>-</span>}</td>
                 <td style={{...s.td,fontWeight:600}}>{fmtNum(gTotal)}</td>
                 <td style={{...s.td,color:remain30<0?C.red:remain30<10?C.yellow:C.green}}>
-                  {remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span>
+                  <WeekForecastTip rows={gWkRows}>{remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span></WeekForecastTip>
                 </td>
                 <td style={{...s.td,color:order30>0?C.yellow:C.muted}}>
                   {order30>0?<span>{fmtNum(order30)}<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(order7)})</span></span>:<span style={{color:C.muted}}>-</span>}
@@ -1463,6 +1496,11 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 const remain30=Math.round(totalStk-avg30*14), remain7=Math.round(totalStk-avg7*14);
                 const order30=Math.max(0,Math.round(avg30*14-totalStk)), order7=Math.max(0,Math.round(avg7*14-totalStk));
                 const uc=o.unitCost||0;
+                const wkRows=[
+                  {label:"1주후",v30:Math.round(totalStk-avg30*7),v7:Math.round(totalStk-avg7*7)},
+                  {label:"2주후",v30:remain30,v7:remain7},
+                  {label:"3주후",v30:Math.round(totalStk-avg30*21),v7:Math.round(totalStk-avg7*21)}
+                ];
                 return <>
                 <td style={{...s.td,color:o.stock==null?C.muted:stk===0?C.red:stk<5?C.red:stk<20?C.yellow:C.green,fontWeight:600}}>
                   {o.stock==null?"-":fmtNum(stk)}
@@ -1471,7 +1509,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 <td style={s.td}><InvEditCell optionId={oid} field="ordered" value={ord} stockManual={stockManual} setStockManual={setStockManual}/></td>
                 <td style={{...s.td,fontWeight:600}}>{fmtNum(totalStk)}</td>
                 <td style={{...s.td,color:remain30<0?C.red:remain30<10?C.yellow:C.green}}>
-                  {remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span>
+                  <WeekForecastTip rows={wkRows}>{remain30}<span style={{fontSize:"9px",color:C.textDim}}>({remain7})</span></WeekForecastTip>
                 </td>
                 <td style={{...s.td,color:order30>0?C.yellow:C.muted}}>
                   {order30>0?<span>{fmtNum(order30)}<span style={{fontSize:"9px",color:C.textDim}}>({fmtNum(order7)})</span></span>:<span style={{color:C.muted}}>-</span>}
