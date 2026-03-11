@@ -892,24 +892,14 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
   const moveItem = async (id, dir, listIds) => {
     const idx = listIds.indexOf(id);
     if((dir==="up"&&idx<=0)||(dir==="down"&&idx>=listIds.length-1)) return;
+    const newList = [...listIds];
+    const targetIdx = dir==="up"?idx-1:idx+1;
+    newList.splice(idx, 1);
+    newList.splice(targetIdx, 0, id);
     const newOrder = {...displayOrder};
-    // 리스트 내 모든 아이템에 현재 순서 초기화 (미설정 시)
-    const needsInit = listIds.some(lid => newOrder[lid] == null);
-    if(needsInit) listIds.forEach((lid, i) => { if(newOrder[lid] == null) newOrder[lid] = i; });
-    const swapIdx = dir==="up"?idx-1:idx+1;
-    const swapId = listIds[swapIdx];
-    const curOrd = newOrder[id];
-    const swapOrd = newOrder[swapId];
-    newOrder[id] = swapOrd;
-    newOrder[swapId] = curOrd;
+    newList.forEach((lid, i) => { newOrder[lid] = i; });
     setDisplayOrder(newOrder);
-    if(needsInit) {
-      // 초기화 시 전체 저장
-      const batch = listIds.map(lid=>({id:lid,sort_order:newOrder[lid]}));
-      await sbUpsert("display_order",batch).catch(()=>{});
-    } else {
-      await sbUpsert("display_order",[{id:id,sort_order:swapOrd},{id:swapId,sort_order:curOrd}]).catch(()=>{});
-    }
+    await sbUpsert("display_order", newList.map((lid,i)=>({id:lid,sort_order:i}))).catch(()=>{});
   };
 
   const toggleHidden = async (optionId) => {
