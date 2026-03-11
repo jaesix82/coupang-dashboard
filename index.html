@@ -202,7 +202,7 @@ function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt, ex
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
       borderRadius:"6px",padding:"8px 12px",minWidth:"150px",boxShadow:"0 4px 16px "+C.shadow,
-      fontSize:"10px",whiteSpace:"nowrap"}}>
+      fontSize:fs(10),whiteSpace:"nowrap"}}>
       <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>{label}</div>
       {hist.map((d,i)=>{
         const isSel = d.dt===selectedDate;
@@ -236,7 +236,7 @@ function MiniTip({children, text}) {
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
       borderRadius:"4px",padding:"4px 8px",boxShadow:"0 4px 12px "+C.shadow,
-      fontSize:"10px",whiteSpace:"nowrap",color:C.yellow,fontWeight:600}}>{text}</div>}
+      fontSize:fs(10),whiteSpace:"nowrap",color:C.yellow,fontWeight:600}}>{text}</div>}
   </span>;
 }
 
@@ -249,9 +249,9 @@ function WeekForecastTip({children, rows}) {
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
       borderRadius:"6px",padding:"8px 12px",boxShadow:"0 4px 12px "+C.shadow,
-      fontSize:"10px",whiteSpace:"nowrap",minWidth:"140px"}}>
+      fontSize:fs(10),whiteSpace:"nowrap",minWidth:"140px"}}>
       <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>예상 잔여재고</div>
-      <div style={{display:"flex",justifyContent:"space-between",gap:"12px",marginBottom:"4px",color:C.textDim,fontSize:"9px"}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:"12px",marginBottom:"4px",color:C.textDim,fontSize:fs(9)}}>
         <span></span><span>30일기준</span><span>7일기준</span>
       </div>
       {rows.map(r=>{
@@ -288,7 +288,7 @@ function KwTip({children, detail}) {
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
       borderRadius:"6px",padding:"8px 12px",minWidth:"140px",boxShadow:"0 4px 16px "+C.shadow,
-      fontSize:"10px",whiteSpace:"nowrap"}}>
+      fontSize:fs(10),whiteSpace:"nowrap"}}>
       {rows.map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",gap:"12px",padding:"2px 0"}}>
         <span style={{color:C.textDim}}>{label}</span>
         <span style={{color:C.yellow,fontWeight:600}}>{val}</span>
