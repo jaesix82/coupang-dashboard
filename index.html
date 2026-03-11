@@ -8,15 +8,15 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
+<style id="theme-css">
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #0a0e1a; color: #e2e8f0; font-family: 'DM Mono', monospace; }
+body { background: #0a0e1a; color: #e2e8f0; font-family: 'DM Mono', monospace; transition: background 0.2s, color 0.2s; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0a0e1a; }
-::-webkit-scrollbar-thumb { background: #1e2d45; border-radius: 3px; }
+::-webkit-scrollbar-track { background: var(--bg, #0a0e1a); }
+::-webkit-scrollbar-thumb { background: var(--border, #1e2d45); border-radius: 3px; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-tbody tr:hover { background: #1a2235 !important; }
+tbody tr:hover { background: var(--hover, #1a2235) !important; }
 </style>
 </head>
 <body>
@@ -104,13 +104,34 @@ function shiftDate(dateStr, days) {
 }
 
 // ── 컬러 팔레트 ───────────────────────────────────────
-const C = {
-  bg:"#0a0e1a", surface:"#111827", surfaceHigh:"#1a2235", border:"#1e2d45",
-  accent:"#00d4ff", accentDim:"#0a3a4a", green:"#00e5a0", greenDim:"#0a2d22",
-  red:"#ff4d6a", redDim:"#2d0a14", yellow:"#ffd60a", yellowDim:"#2d2400",
-  orange:"#ff8c00",
-  muted:"#4a5568", text:"#e2e8f0", textDim:"#718096"
+const THEMES = {
+  dark: {
+    bg:"#0a0e1a", surface:"#111827", surfaceHigh:"#1a2235", border:"#1e2d45",
+    accent:"#00d4ff", accentDim:"#0a3a4a", green:"#00e5a0", greenDim:"#0a2d22",
+    red:"#ff4d6a", redDim:"#2d0a14", yellow:"#ffd60a", yellowDim:"#2d2400",
+    orange:"#ff8c00",
+    muted:"#4a5568", text:"#e2e8f0", textDim:"#718096",
+    hoverRow:"#1a2235", shadow:"rgba(0,0,0,0.5)"
+  },
+  light: {
+    bg:"#f0f2f5", surface:"#ffffff", surfaceHigh:"#e8ecf1", border:"#d1d9e0",
+    accent:"#0077b6", accentDim:"#d0eaf7", green:"#059669", greenDim:"#d1fae5",
+    red:"#dc2626", redDim:"#fee2e2", yellow:"#d97706", yellowDim:"#fef3c7",
+    orange:"#ea580c",
+    muted:"#9ca3af", text:"#1f2937", textDim:"#6b7280",
+    hoverRow:"#f3f4f6", shadow:"rgba(0,0,0,0.12)"
+  }
 };
+let C = {...THEMES.dark};
+function applyTheme(name) {
+  Object.assign(C, THEMES[name]);
+  s = buildStyles();
+  document.body.style.background = C.bg;
+  document.body.style.color = C.text;
+  document.documentElement.style.setProperty("--bg", C.bg);
+  document.documentElement.style.setProperty("--border", C.border);
+  document.documentElement.style.setProperty("--hover", C.hoverRow);
+}
 
 // ── 폰트 크기 (S/M/L) ──────────────────────────────────
 const FONT_SCALES = {S:1.0, M:1.2, L:1.45};
@@ -180,7 +201,7 @@ function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt, ex
     {children}
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
-      borderRadius:"6px",padding:"8px 12px",minWidth:"150px",boxShadow:"0 4px 16px rgba(0,0,0,0.5)",
+      borderRadius:"6px",padding:"8px 12px",minWidth:"150px",boxShadow:"0 4px 16px "+C.shadow,
       fontSize:"10px",whiteSpace:"nowrap"}}>
       <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>{label}</div>
       {hist.map((d,i)=>{
@@ -214,7 +235,7 @@ function MiniTip({children, text}) {
     {children}
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
-      borderRadius:"4px",padding:"4px 8px",boxShadow:"0 4px 12px rgba(0,0,0,0.5)",
+      borderRadius:"4px",padding:"4px 8px",boxShadow:"0 4px 12px "+C.shadow,
       fontSize:"10px",whiteSpace:"nowrap",color:C.yellow,fontWeight:600}}>{text}</div>}
   </span>;
 }
@@ -227,7 +248,7 @@ function WeekForecastTip({children, rows}) {
     {children}
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"4px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
-      borderRadius:"6px",padding:"8px 12px",boxShadow:"0 4px 12px rgba(0,0,0,0.5)",
+      borderRadius:"6px",padding:"8px 12px",boxShadow:"0 4px 12px "+C.shadow,
       fontSize:"10px",whiteSpace:"nowrap",minWidth:"140px"}}>
       <div style={{fontWeight:700,color:C.accent,marginBottom:"6px",letterSpacing:"0.1em"}}>예상 잔여재고</div>
       <div style={{display:"flex",justifyContent:"space-between",gap:"12px",marginBottom:"4px",color:C.textDim,fontSize:"9px"}}>
@@ -266,7 +287,7 @@ function KwTip({children, detail}) {
     {children}
     {show && <div style={{position:"absolute",bottom:"100%",left:"50%",transform:"translateX(-50%)",
       marginBottom:"6px",zIndex:200,background:C.surface,border:`1px solid ${C.border}`,
-      borderRadius:"6px",padding:"8px 12px",minWidth:"140px",boxShadow:"0 4px 16px rgba(0,0,0,0.5)",
+      borderRadius:"6px",padding:"8px 12px",minWidth:"140px",boxShadow:"0 4px 16px "+C.shadow,
       fontSize:"10px",whiteSpace:"nowrap"}}>
       {rows.map(([label,val])=><div key={label} style={{display:"flex",justifyContent:"space-between",gap:"12px",padding:"2px 0"}}>
         <span style={{color:C.textDim}}>{label}</span>
@@ -1695,6 +1716,7 @@ function App() {
   const [activeTab, setActiveTab] = useState("yesterday");
   const [sec2Totals, setSec2Totals] = useState(null);
   const [fontSizeKey, setFontSizeKey] = useState("M");
+  const [theme, setTheme] = useState("dark");
 
   // 기간 모드에서 사용할 날짜
   const effectiveDate = date;
@@ -1767,6 +1789,12 @@ function App() {
             borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer",
             fontFamily:"'DM Mono',monospace",fontWeight:700,whiteSpace:"nowrap"}}>
           {fontSizeKey}
+        </button>
+        <button onClick={()=>{const next=theme==="dark"?"light":"dark"; setTheme(next); applyTheme(next);}}
+          style={{background:C.surfaceHigh,border:"1px solid "+C.border,color:C.text,
+            borderRadius:"4px",padding:"3px 10px",fontSize:"10px",cursor:"pointer",
+            fontFamily:"'DM Mono',monospace",fontWeight:700,whiteSpace:"nowrap"}}>
+          {theme==="dark"?"☀":"☾"}
         </button>
       </div>
     </div>
