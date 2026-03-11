@@ -164,7 +164,7 @@ function SecTitle({n, children}) {
 }
 
 // 7일 히스토리 툴팁
-function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt}) {
+function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt, extraLine}) {
   const [show, setShow] = useState(false);
   if(!hist || hist.length===0) return children;
   const avg = hist.reduce((s,d)=>s+(d.v||0),0)/hist.length;
@@ -192,6 +192,10 @@ function HoverTip({children, hist, label, fmt, selectedDate, subHist, subFmt}) {
         display:"flex",justifyContent:"space-between",color:C.yellow,fontWeight:600}}>
         <span>{hist.length}일 평균</span><span>{fmt(Math.round(avg*10)/10)}{subHist&&subFmt&&<span style={{color:C.textDim,marginLeft:"4px"}}>{subFmt(avg,subAvgs)}</span>}</span>
       </div>
+      {extraLine&&<div style={{borderTop:`1px solid ${C.border}`,marginTop:"4px",paddingTop:"4px",
+        display:"flex",justifyContent:"space-between",color:C.accent,fontWeight:600}}>
+        <span>{extraLine}</span>
+      </div>}
     </div>}
   </span>;
 }
@@ -838,13 +842,40 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
   const [invMode, setInvMode] = useState(false);
   const [hiddenSet, setHiddenSet] = useState(new Set());
   const [stockManual, setStockManual] = useState({});
+  const [displayOrder, setDisplayOrder] = useState({});
 
   useEffect(() => {
     sbQuery("hidden_options","option_id",{}).then(rows => setHiddenSet(new Set(rows.map(r=>r.option_id)))).catch(()=>{});
     sbQuery("stock_manual","option_id,incoming,ordered",{}).then(rows => {
       const m={}; rows.forEach(r=>m[r.option_id]={incoming:r.incoming||0,ordered:r.ordered||0}); setStockManual(m);
     }).catch(()=>{});
+    sbQuery("display_order","id,sort_order",{}).then(rows => {
+      const m={}; rows.forEach(r=>m[r.id]=r.sort_order); setDisplayOrder(m);
+    }).catch(()=>{});
   }, []);
+
+  const applyOrder = (items, keyFn) => {
+    return [...items].sort((a,b) => {
+      const oa = displayOrder[keyFn(a)] ?? 9999, ob = displayOrder[keyFn(b)] ?? 9999;
+      if(oa !== ob) return oa - ob;
+      return 0; // keep original order if same
+    });
+  };
+
+  const moveItem = async (id, dir, listIds) => {
+    const idx = listIds.indexOf(id);
+    if((dir==="up"&&idx<=0)||(dir==="down"&&idx>=listIds.length-1)) return;
+    const swapIdx = dir==="up"?idx-1:idx+1;
+    const swapId = listIds[swapIdx];
+    const newOrder = {...displayOrder};
+    const curOrd = newOrder[id] ?? idx;
+    const swapOrd = newOrder[swapId] ?? swapIdx;
+    newOrder[id] = swapOrd;
+    newOrder[swapId] = curOrd;
+    setDisplayOrder(newOrder);
+    await sbUpsert("display_order",{id:id,sort_order:swapOrd}).catch(()=>{});
+    await sbUpsert("display_order",{id:swapId,sort_order:curOrd}).catch(()=>{});
+  };
 
   const toggleHidden = async (optionId) => {
     const next = new Set(hiddenSet);
@@ -1202,6 +1233,20 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
     else { const next={}; rows.forEach(g=>next[g.pName]=true); setExp(next); }
   };
 
+  // 키보드 단축키: 1=펼치기, 2=판매만, 3=재고, 4=키워드, 5=순서
+  useEffect(() => {
+    const handler = (e) => {
+      if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
+      if(e.key==="1") toggleAll();
+      else if(e.key==="2") setSalesOnly(p=>!p);
+      else if(e.key==="3") { setInvMode(p=>{if(!p)setKwMode(false);return !p;}); }
+      else if(e.key==="4") { setKwMode(p=>{if(!p)setInvMode(false);return !p;}); }
+      else if(e.key==="5") setHideMode(m=>m==="hide"?"show":m==="show"?"edit":"hide");
+    };
+    window.addEventListener("keydown",handler);
+    return ()=>window.removeEventListener("keydown",handler);
+  });
+
   if (err) return <ErrBox msg={err}/>;
   if (!rows) return <Spinner/>;
   if (rows.length === 0) return <div style={{...s.card,color:C.textDim,textAlign:"center",fontSize:"12px",padding:"32px"}}>해당 날짜 판매 데이터 없음</div>;
@@ -1210,6 +1255,11 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
   if(salesOnly && !invMode) filtered = filtered.map(g=>({...g,opts:g.opts.filter(o=>(o.sales_qty||0)!==0||Math.abs(o.cancel_qty||0)>0||(o.adCost||0)>0)})).filter(g=>g.opts.length>0);
   // 숨김 필터: edit모드에서는 전부 보여주고, show면 전부, hide면 숨김 제외
   if(hideMode==="hide") filtered = filtered.map(g=>({...g,opts:g.opts.filter(o=>!(o.optionIds||[o.option_id]).some(id=>hiddenSet.has(id)))})).filter(g=>g.opts.length>0);
+  // 순서 적용: displayOrder가 있으면 그 순서대로, 없으면 매출순
+  if(Object.keys(displayOrder).length>0) {
+    filtered = applyOrder(filtered, g=>g.pName);
+    filtered = filtered.map(g=>({...g,opts:applyOrder(g.opts, o=>(o.optionIds||[o.option_id])[0])}));
+  }
   // 필터된 rows에서 합계 계산
   const totals = filtered.reduce((t,g)=>{
     // 계정 필터가 걸려있으면 해당 계정 옵션만 합산
@@ -1234,16 +1284,16 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
       <AcctButtons accounts={accounts} current={acctFilter} onChange={setAcctFilter}/>
       <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
+        <button onClick={toggleAll} style={{...acctBtnStyle(false),fontSize:"10px",padding:"3px 10px"}} title="단축키: 1">{allExpanded?"모두 접기":"모두 펼치기"}</button>
+        <button onClick={()=>setSalesOnly(p=>!p)} style={{...acctBtnStyle(salesOnly),fontSize:"10px",padding:"3px 10px"}} title="단축키: 2">{salesOnly?"판매만":"전체"}</button>
+        <button onClick={()=>{setInvMode(p=>!p);if(!invMode)setKwMode(false);}} style={{...acctBtnStyle(invMode),fontSize:"10px",padding:"3px 10px",color:invMode?C.green:C.textDim,borderColor:invMode?C.green:C.border}} title="단축키: 3">재고</button>
+        <button onClick={()=>{setKwMode(p=>!p);if(!kwMode)setInvMode(false);}} style={{...acctBtnStyle(kwMode),fontSize:"10px",padding:"3px 10px"}} title="단축키: 4">키워드</button>
         <button onClick={()=>setHideMode(m=>m==="hide"?"show":m==="show"?"edit":"hide")}
           style={{...acctBtnStyle(hideMode!=="hide"),fontSize:"10px",padding:"3px 10px",
             color:hideMode==="edit"?C.red:hideMode==="show"?C.yellow:C.textDim,
-            borderColor:hideMode==="edit"?C.red:hideMode==="show"?C.yellow:C.border}}>
-          {hideMode==="edit"?"숨김 설정":hideMode==="show"?"숨김 표시":"숨김"}
+            borderColor:hideMode==="edit"?C.red:hideMode==="show"?C.yellow:C.border}} title="단축키: 5">
+          {hideMode==="edit"?"순서 설정":hideMode==="show"?"순서 보기":"순서"}
         </button>
-        <button onClick={()=>{setKwMode(p=>!p);if(!kwMode)setInvMode(false);}} style={{...acctBtnStyle(kwMode),fontSize:"10px",padding:"3px 10px"}}>키워드</button>
-        <button onClick={()=>{setInvMode(p=>!p);if(!invMode)setKwMode(false);}} style={{...acctBtnStyle(invMode),fontSize:"10px",padding:"3px 10px",color:invMode?C.green:C.textDim,borderColor:invMode?C.green:C.border}}>재고관리</button>
-        <button onClick={()=>setSalesOnly(p=>!p)} style={{...acctBtnStyle(salesOnly),fontSize:"10px",padding:"3px 10px"}}>{salesOnly?"판매만":"전체"}</button>
-        <button onClick={toggleAll} style={{...acctBtnStyle(false),fontSize:"10px",padding:"3px 10px"}}>{allExpanded?"모두 접기":"모두 펼치기"}</button>
       </div>
     </div>
     <table style={s.tbl}>
@@ -1369,12 +1419,19 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
             if(allOptsHidden) ids.forEach(id=>toggleHidden(id));
             else ids.filter(id=>!hiddenSet.has(id)).forEach(id=>toggleHidden(id));
           };
+          const productIds = filtered.map(gg=>gg.pName);
           return [
             <tr key={g.pName} onClick={()=>toggle(g.pName)} style={{cursor:"pointer"}}>
               <td style={s.tdL}>
-                {hideMode==="edit"&&<input type="checkbox" checked={allOptsHidden}
-                  onChange={toggleProductHidden} onClick={e=>e.stopPropagation()}
-                  style={{marginRight:"8px",cursor:"pointer",accentColor:C.red}}/>}
+                {hideMode==="edit"&&<>
+                  <input type="checkbox" checked={allOptsHidden}
+                    onChange={toggleProductHidden} onClick={e=>e.stopPropagation()}
+                    style={{marginRight:"4px",cursor:"pointer",accentColor:C.red}}/>
+                  <span onClick={e=>{e.stopPropagation();moveItem(g.pName,"up",productIds);}}
+                    style={{cursor:"pointer",fontSize:"9px",color:C.textDim,marginRight:"2px"}}>▲</span>
+                  <span onClick={e=>{e.stopPropagation();moveItem(g.pName,"down",productIds);}}
+                    style={{cursor:"pointer",fontSize:"9px",color:C.textDim,marginRight:"4px"}}>▼</span>
+                </>}
                 <span style={{color:C.accent,marginRight:"8px",fontSize:"10px",fontWeight:700}}>
                   {open?"▼":"▶"}
                 </span>
@@ -1448,7 +1505,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                   </HoverTip>:<span style={{color:C.muted}}>-</span>}
                 </td>;})()}
               <td style={{...s.td,color:C.accent,fontWeight:700}}>
-                <HoverTip hist={gHistRev} label="매출" fmt={fmtWon} selectedDate={date}>
+                <HoverTip hist={gHistRev} label="매출" fmt={fmtWon} selectedDate={date}
+                  extraLine={gQty>0?"개당 "+fmtWon(Math.round(gRev/gQty)):null}>
                   {fmtWon(gRev)}
                 </HoverTip>
               </td>
@@ -1465,14 +1523,21 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                 </HoverTip>
               </td></>}
             </tr>,
-            open && displayOpts.map(o => {
+            open && displayOpts.map((o,oi) => {
               const oIds = o.optionIds||[o.option_id];
               const isHidden = oIds.some(id=>hiddenSet.has(id));
+              const optIds = displayOpts.map(oo=>(oo.optionIds||[oo.option_id])[0]);
               return <tr key={oIds[0]} style={{background:C.surfaceHigh+"88",opacity:isHidden&&hideMode!=="edit"?0.35:1}}>
               <td style={{...s.tdL,paddingLeft:"40px",color:C.textDim}}>
-                {hideMode==="edit"&&<input type="checkbox" checked={isHidden}
-                  onChange={()=>oIds.forEach(id=>toggleHidden(id))} onClick={e=>e.stopPropagation()}
-                  style={{marginRight:"8px",cursor:"pointer",accentColor:C.red}}/>}
+                {hideMode==="edit"&&<>
+                  <input type="checkbox" checked={isHidden}
+                    onChange={()=>oIds.forEach(id=>toggleHidden(id))} onClick={e=>e.stopPropagation()}
+                    style={{marginRight:"4px",cursor:"pointer",accentColor:C.red}}/>
+                  <span onClick={e=>{e.stopPropagation();moveItem(oIds[0],"up",optIds);}}
+                    style={{cursor:"pointer",fontSize:"9px",color:C.textDim,marginRight:"2px"}}>▲</span>
+                  <span onClick={e=>{e.stopPropagation();moveItem(oIds[0],"down",optIds);}}
+                    style={{cursor:"pointer",fontSize:"9px",color:C.textDim,marginRight:"4px"}}>▼</span>
+                </>}
                 ↳ {o.link
                 ? <a href={o.link} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()}
                     style={{color:isHidden?C.muted:o.rocketNotWinner?C.orange:C.accent,textDecoration:isHidden?"line-through":"none",borderBottom:`1px dashed ${isHidden?C.muted:o.rocketNotWinner?C.orange:C.accent}44`}}>{o.optName}</a>
@@ -1545,7 +1610,8 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
                   </HoverTip>:<span style={{color:C.muted}}>-</span>}
                 </td>;})()}
               <td style={s.td}>
-                <HoverTip hist={o.histRevenue} label="매출" fmt={fmtWon} selectedDate={date}>
+                <HoverTip hist={o.histRevenue} label="매출" fmt={fmtWon} selectedDate={date}
+                  extraLine={(o.sales_qty||0)>0?"개당 "+fmtWon(Math.round((o.revenue||0)/(o.sales_qty||1))):null}>
                   {fmtWon(o.revenue)}
                 </HoverTip>
               </td>
