@@ -673,16 +673,15 @@ ${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(func
 }
 
 // ── 섹션 1: KPI ───────────────────────────────────────
-function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, sec2Totals}) {
+function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, sec2Totals, acctFilter, onAcctChange}) {
   const [rawData, setRawData] = useState(null);
   const [err, setErr] = useState(null);
-  const [acctFilter, setAcctFilter] = useState("ALL");
   const [realtimeData, setRealtimeData] = useState(null);
   const [realtimeLoading, setRealtimeLoading] = useState(false);
   const [realtimeErr, setRealtimeErr] = useState(null);
 
   useEffect(() => {
-    setRawData(null); setErr(null); setAcctFilter("ALL"); onTabChange("yesterday");
+    setRawData(null); setErr(null); onAcctChange("ALL"); onTabChange("yesterday");
     setRealtimeData(null); setRealtimeErr(null);
     const qDate = rangeMode
       ? {"report_date=gte":date,"report_date=lte":endDate}
@@ -793,7 +792,7 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, s
         <button onClick={()=>handleTabChange("yesterday")} style={tabStyle(false)}>어제 확정</button>
         <button style={tabStyle(true)}>실시간</button>
         <button onClick={loadRealtime} style={{...tabStyle(false),fontSize:fs(13),padding:"4px 8px",lineHeight:1}} title="새로고침">↻</button>
-        <AcctButtons accounts={rtAccts} current={acctFilter} onChange={setAcctFilter}/>
+        <AcctButtons accounts={rtAccts} current={acctFilter} onChange={onAcctChange}/>
         {crawledTime && <span style={{fontSize:fs(10),color:C.textDim,marginLeft:"auto"}}>마지막 수집: {crawledTime}</span>}
       </div>
       <div style={s.kpiGrid}>
@@ -839,7 +838,7 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, s
     <div style={{display:"flex",gap:"8px",marginBottom:"14px",alignItems:"center"}}>
       <button style={tabStyle(true)}>어제 확정</button>
       <button onClick={()=>handleTabChange("realtime")} style={tabStyle(false)}>실시간</button>
-      <AcctButtons accounts={accounts} current={acctFilter} onChange={setAcctFilter}/>
+      <AcctButtons accounts={accounts} current={acctFilter} onChange={onAcctChange}/>
     </div>
     <div style={s.kpiGrid}>
       {kpis.map(k => <div key={k.label} style={{
@@ -857,11 +856,10 @@ function KPISection({date, endDate, rangeMode, onLoad, activeTab, onTabChange, s
 }
 
 // ── 섹션 2: 어제 판매 트리 ────────────────────────────
-function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
+function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab, acctFilter, onAcctChange}) {
   const [rows, setRows] = useState(null);
   const [exp, setExp] = useState({});
   const [err, setErr] = useState(null);
-  const [acctFilter, setAcctFilter] = useState("ALL");
   const [accounts, setAccounts] = useState([]);
   const [salesOnly, setSalesOnly] = useState(true);
   const [hideMode, setHideMode] = useState("hide");
@@ -915,7 +913,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
   };
 
   useEffect(() => {
-    setRows(null); setErr(null); setExp({}); setAcctFilter("ALL");
+    setRows(null); setErr(null); setExp({});
     const isRealtime = activeTab==="realtime";
     const qDate = rangeMode
       ? {"report_date=gte":date,"report_date=lte":endDate}
@@ -1307,7 +1305,7 @@ function YesterdaySales({date, endDate, rangeMode, onLoad, activeTab}) {
 
   return <div style={s.card}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-      <AcctButtons accounts={accounts} current={acctFilter} onChange={setAcctFilter}/>
+      <AcctButtons accounts={accounts} current={acctFilter} onChange={onAcctChange}/>
       <div style={{display:"flex",gap:"6px",alignItems:"center"}}>
         <button onClick={toggleAll} style={{...acctBtnStyle(false),fontSize:fs(10),padding:"3px 10px"}} title="단축키: 1">{allExpanded?"모두 접기":"모두 펼치기"}</button>
         <button onClick={()=>setSalesOnly(p=>!p)} style={{...acctBtnStyle(salesOnly),fontSize:fs(10),padding:"3px 10px"}} title="단축키: 2">{salesOnly?"판매만":"전체"}</button>
@@ -1707,6 +1705,7 @@ function App() {
   const [sec2Totals, setSec2Totals] = useState(null);
   const [fontSizeKey, setFontSizeKey] = useState("M");
   const [theme, setTheme] = useState("dark");
+  const [acctFilter, setAcctFilter] = useState("ALL");
 
   // 기간 모드에서 사용할 날짜
   const effectiveDate = date;
@@ -1792,11 +1791,11 @@ function App() {
       <div style={{...s.main,flex:1,minWidth:0}}>
         <div style={s.sec}>
           <SecTitle n="01">{activeTab==="realtime"?"실시간 총집계":rangeMode?`기간 총집계 — ${date} ~ ${endDate}`:`일일 총집계 — ${date}`}</SecTitle>
-          <KPISection date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onTabChange={setActiveTab} sec2Totals={sec2Totals} onLoad={data=>setDashboardCtx(p=>({...p,kpi:data}))}/>
+          <KPISection date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onTabChange={setActiveTab} sec2Totals={sec2Totals} acctFilter={acctFilter} onAcctChange={setAcctFilter} onLoad={data=>setDashboardCtx(p=>({...p,kpi:data}))}/>
         </div>
         <div style={s.sec}>
           <SecTitle n="02">{activeTab==="realtime"?"실시간 판매 상품":rangeMode?`판매 상품 — ${date} ~ ${endDate}`:`판매 상품 (클릭하여 옵션 펼치기)`}</SecTitle>
-          <YesterdaySales date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} onLoad={(data,totals)=>{setDashboardCtx(p=>({...p,topProducts:data})); if(totals) setSec2Totals(totals);}}/>
+          <YesterdaySales date={date} endDate={effectiveEndDate} rangeMode={rangeMode} activeTab={activeTab} acctFilter={acctFilter} onAcctChange={setAcctFilter} onLoad={(data,totals)=>{setDashboardCtx(p=>({...p,topProducts:data})); if(totals) setSec2Totals(totals);}}/>
         </div>
       </div>
       <ChatPanel context={{...dashboardCtx,yesterday:date}} yesterday={date}/>
