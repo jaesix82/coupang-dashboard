@@ -638,8 +638,8 @@ ${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(func
     <div style={chatStyles.header}>
       <span>AI 분석</span>
       <span style={{fontSize:fs(9),color:C.textDim,marginLeft:"8px",fontWeight:400}}>{yesterday}</span>
-      {localStorage.getItem("ANTHROPIC_KEY") && <button onClick={()=>{setShowKeyInput(true);}}
-        style={{float:"right",background:"none",border:"none",color:C.muted,fontSize:fs(9),cursor:"pointer",fontFamily:"'DM Mono',monospace"}}>KEY</button>}
+      <button onClick={()=>setShowKeyInput(p=>!p)}
+        style={{float:"right",background:"none",border:"none",color:C.muted,fontSize:fs(9),cursor:"pointer",fontFamily:"'DM Mono',monospace"}}>KEY</button>
     </div>
 
     {showKeyInput && <div style={{padding:"12px",borderBottom:`1px solid ${C.border}`}}>
