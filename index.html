@@ -398,67 +398,12 @@ function ChatPanel({context, yesterday}) {
   };
 
   function buildSystemPrompt(ctx) {
-    const prods = ctx.topProducts||[];
-    const prodDetails = prods.slice(0,15).map(p => {
-      const opts = (p.opts||[]).slice(0,5);
-      const optLines = opts.map(o => {
-        const cancelAbs = Math.abs(o.cancel_qty||0);
-        const totalSold = (o.sales_qty||0)+cancelAbs;
-        const cancelRate = totalSold>0?(cancelAbs/totalSold*100).toFixed(1):"0";
-        return `    - ${o.optName}: 재고${o.stock!=null?o.stock:"?"}개, 조회${o.views||0}, 전환율${(o.conversion_rate||0).toFixed(1)}%, 순판매${o.sales_qty||0}건, 취소${cancelAbs}건(반품률${cancelRate}%), 매출${(o.revenue||0).toLocaleString()}원, 광고비${(o.adCost||0).toLocaleString()}원${o.wingQty>0?`, 윙판매${o.wingQty}건`:""}`;
-      }).join('\n');
-      return `  * ${p.pName}: 총매출${p.rev?.toLocaleString()}원, 총${p.qty}건, 광고비${p.adCost?.toLocaleString()}원\n${optLines}`;
-    }).join('\n');
+    return `쿠팡 윙 셀러 대시보드 분석 AI. 기준일: ${ctx.yesterday||yesterday}
+KPI: 매출${ctx.kpi?.rev?.toLocaleString()||"?"}원, ${ctx.kpi?.qty||"?"}건, 광고비${ctx.kpi?.adCost?.toLocaleString()||"?"}원, 순이익${ctx.kpi?.totalMargin?.toLocaleString()||"?"}원
 
-    return `당신은 쿠팡 윙 온라인셀러의 운영 대시보드 전담 분석 어시스턴트입니다.
-
-## 대시보드 컬럼 정의
-- 판매량(sales_qty): 순판매량 (총판매 - 취소). 괄호 안 숫자는 윙 판매량
-- 취소: 취소수량(절대값)과 반품률. 반품률 = 취소 / (순판매+취소) × 100. 30% 초과 시 빨간색 경고
-- 조회수(views): 상품 페이지 방문 수
-- 전환율(conversion_rate): 조회 대비 구매 비율 = 판매수량/조회수×100
-- 매출(revenue): margin_daily 뷰 기준 매출 (쿠폰 차감 후)
-- 광고비(ad_cost): 쿠팡 PA 광고 지출. 광고판매: 광고로 발생한 판매 건수
-- 순이익: (마진단가 × 판매수량). 마진 = 매출 - 원가 - 수수료 - 배송비 - 쿠폰
-- 재고(stock): 최신 스냅샷 기준 잔여 수량. 품절이면 0
-- 7일 평균: 각 데이터 셀에 hover 시 최근 7일 추이와 평균 표시. ▼은 7일 평균 이하, ▲은 이상
-- 윙 vs 로켓그로스: 동일 상품이 윙(직배송)과 로켓그로스(쿠팡물류)로 판매 가능. 옵션 행에서 병합 표시
-
-## 현재 데이터 (기준일: ${ctx.yesterday||yesterday})
-
-### KPI 요약
-- 총 매출: ${ctx.kpi?.rev?.toLocaleString()||"?"}원
-- 총 판매: ${ctx.kpi?.qty||"?"}건
-- 총 광고비: ${ctx.kpi?.adCost?.toLocaleString()||"?"}원 (광고판매 ${ctx.kpi?.adQty||0}건, 비율 ${ctx.kpi?.adRatio||0}%)
-- 순이익 (추정): ${ctx.kpi?.totalMargin?.toLocaleString()||"?"}원
-
-### 상품별 상세 (매출 상위)
-${prodDetails||'데이터 로딩 중...'}
-
-사용자가 대시보드 데이터에 대해 질문하면 위 정의와 실제 수치를 기반으로 정확하게 답하세요.
-답변은 한국어로, 간결하고 실용적으로. 구체적 수치를 인용하세요.
-
-## DB 직접 조회
-query_database 도구로 Supabase DB에 직접 쿼리할 수 있습니다. 데이터가 부족하거나 원인 분석이 필요하면 적극 활용하세요.
-사용 가능한 테이블과 주요 컬럼:
-- sales_daily: option_id, report_date, views, sales_qty, cancel_qty, revenue, conversion_rate
-- ads_daily: option_id, report_date, keyword, impressions, clicks, ad_cost, orders_1d, sales_qty_1d, campaign_name
-- inventory_snapshots: option_id, snapshot_date, stock, is_item_winner, revenue_7d, sales_7d
-- products: option_id, product_name, option_name, account, fulfillment_type, vendor_item_id
-- margin_daily (뷰): option_id, report_date, product_name, option_name, margin, margin_rate, revenue, account
-- sales_realtime: option_id, views, sales_qty, revenue, visitors, account, crawled_at
-- cost_history: option_id, start_date, cost (원가 이력)
-- commission_history: option_id, start_date, rate (수수료율 이력)
-
-쿼리 시 select에 필요한 컬럼만 지정하고, filter로 조건을 걸어 데이터를 최소화하세요.
-여러 번 조회 가능합니다. 한번에 너무 많은 데이터를 가져오지 마세요 (limit 사용).
-
-## 메모리
-save_memo로 중요한 발견/패턴/인사이트를 저장하면 다음 세션에서 자동 참고됩니다.
-예: 특정 상품의 계절 패턴, 광고 효율 기준, 사용자 선호 분석 방식 등.
-outdated된 메모는 delete_memo로 정리하세요.
-
-${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(function(m){return "[#"+m.id+"] "+m.title+" ("+(m.created_at?.slice(0,10)||"")+")\\n"+m.content;}).join("\n\n") : "저장된 메모 없음"}`;
+query_database로 DB 조회 가능. 상품 상세는 DB에서 직접 조회하세요.
+테이블: sales_daily(option_id,report_date,views,sales_qty,cancel_qty,revenue,conversion_rate), ads_daily(option_id,report_date,keyword,clicks,ad_cost,orders_1d), inventory_snapshots(option_id,snapshot_date,stock,sales_7d), products(option_id,product_name,option_name,account), margin_daily(option_id,report_date,margin,margin_rate,revenue), cost_history(option_id,start_date,cost), commission_history(option_id,start_date,rate), shipping_history(option_id,start_date,shipping_fee), sales_realtime(option_id,views,sales_qty,revenue,account)
+한국어 간결 답변. 수치 인용.${memos.length>0?"\n메모:"+memos.map(function(m){return "[#"+m.id+"]"+m.title;}).join(", "):""}`;
   }
 
   const DB_TOOLS = [{
@@ -532,11 +477,11 @@ ${memos.length>0 ? "### 저장된 메모 ("+memos.length+"개)\n"+memos.map(func
         "anthropic-dangerous-direct-browser-access": "true"
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2048,
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
         system: buildSystemPrompt(context),
         tools: DB_TOOLS,
-        messages: apiMessages
+        messages: apiMessages.slice(-10)
       })
     });
     if(!response.ok) {
